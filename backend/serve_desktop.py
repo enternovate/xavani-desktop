@@ -490,6 +490,66 @@ def build_desktop_app(api_port: int):
             "note": "Applies to new chats.",
         })
 
+    # ---------------- effort / fast-mode preferences ----------------
+
+    VALID_EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+
+    @routes.post("/desktop/api/model/prefs")
+    async def model_prefs(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        if "effort" in body and str(body["effort"]) not in VALID_EFFORTS:
+            return web.json_response(
+                {"error": f"effort must be one of {', '.join(VALID_EFFORTS)}"}, status=400)
+        config_path = _xavani_home() / "config.yaml"
+        try:
+            from ruamel.yaml import YAML
+
+            yaml = YAML(typ="rt")
+            yaml.preserve_quotes = True
+            data = yaml.load(config_path) if config_path.exists() else {}
+            if data is None:
+                data = {}
+            agent = data.setdefault("agent", {})
+            # Engine keys (gateway/run.py): agent.reasoning_effort,
+            # agent.service_tier ("fast"/"normal"). Written under `agent`,
+            # NOT `model` — the engine reads them from the agent section.
+            if "effort" in body:
+                agent["reasoning_effort"] = str(body["effort"])
+            if "fast_mode" in body:
+                agent["service_tier"] = "fast" if bool(body["fast_mode"]) else "normal"
+            with open(config_path, "w", encoding="utf-8") as fh:
+                yaml.dump(data, fh)
+        except Exception as exc:
+            return web.json_response({"error": f"config write failed: {exc}"}, status=500)
+        cfg = _load_config()
+        agent_cfg = cfg.get("agent") or {}
+        return web.json_response({
+            "ok": True,
+            "effort": agent_cfg.get("reasoning_effort") or "medium",
+            "fast_mode": (agent_cfg.get("service_tier") or "normal") == "fast",
+        })
+
+    @routes.get("/desktop/api/model/prefs")
+    async def model_prefs_get(_request: "web.Request") -> "web.Response":
+        cfg = _load_config()
+        agent_cfg = cfg.get("agent") or {}
+        fast_supported = False
+        try:
+            from xavani_cli.models import model_supports_fast_mode
+
+            model = (cfg.get("model") or {}).get("default") or ""
+            fast_supported = bool(model_supports_fast_mode(model))
+        except Exception:
+            pass
+        return web.json_response({
+            "effort": agent_cfg.get("reasoning_effort") or "medium",
+            "fast_mode": (agent_cfg.get("service_tier") or "normal") == "fast",
+            "fast_supported": fast_supported,
+        })
+
     # ---------------- skills hub (GitHub-backed) ----------------
 
     @routes.get("/desktop/api/skills/hub/search")
