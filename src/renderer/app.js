@@ -21,7 +21,11 @@ const dapi = (p, opts) => fetch(`http://127.0.0.1:${state.desktopPort}${p}`, opt
 
 /* ---------------- boot ---------------- */
 
+let booted = false;
+
 window.xavaniDesktop.onBackendReady(({ apiPort, desktopPort }) => {
+  if (booted) return;
+  booted = true;
   state.apiPort = apiPort;
   state.desktopPort = desktopPort;
   $('#boot').classList.add('hidden');
