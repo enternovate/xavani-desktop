@@ -61,6 +61,23 @@
       </div>
     </aside>
 
+    <aside id="explorer" class="hidden">
+      <div class="explorer-head">
+        <span class="explorer-title">Explorer</span>
+        <button id="explorer-exit" class="btn ghost sm" title="Exit studio (⌘⇧S)">Exit</button>
+      </div>
+      <div class="explorer-root">
+        <input id="ws-root" class="mono" placeholder="~/path/to/project" spellcheck="false">
+        <button id="ws-root-go" class="btn ghost sm" title="Set workspace root">Set</button>
+      </div>
+      <div class="explorer-actions">
+        <button id="fs-refresh" class="mini-btn" title="Refresh tree">⟳ Refresh</button>
+        <button id="fs-newfile" class="mini-btn" title="New file in selected folder">+ File</button>
+        <button id="fs-newdir" class="mini-btn" title="New folder in selected folder">+ Folder</button>
+      </div>
+      <div id="file-tree"><div class="empty">Loading…</div></div>
+    </aside>
+
     <main id="main">
       <header id="topbar">
         <div id="topbar-title">Chat</div>
@@ -122,6 +139,22 @@
       </section>
       <section id="view-status" class="view"><div class="panel-wrap"><div id="status-panel" class="panel-list"></div></div></section>
       <section id="view-import" class="view"><div class="panel-wrap"><div id="import-panel" class="panel-list"></div></div></section>
+
+      <section id="view-studio" class="view">
+        <header id="studio-bar">
+          <div id="editor-tabs"></div>
+          <div class="studio-actions">
+            <span id="save-state" class="dim"></span>
+            <button id="editor-save" class="btn primary sm" title="Save (⌘S)">Save</button>
+          </div>
+        </header>
+        <div id="editor-wrap">
+          <div id="editor-gutter" class="mono">1</div>
+          <textarea id="editor" class="mono" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+          <div id="editor-empty" class="empty">No file open.<br><br>Pick one from the Explorer on the left, or start a dev server and load it in the Preview on the right.</div>
+        </div>
+        <div id="studio-help" class="mono">/studio toggles this layout · ⌘S saves · Visual edit (right dock) moves, deletes, recolours &amp; animates elements</div>
+      </section>
     </main>
 
     <aside id="dock">
