@@ -1,7 +1,7 @@
 {
   "name": "xavani-desktop",
   "productName": "Xavani",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Xavani Agent desktop app — the full CLI engine in a native GUI",
   "main": "src/main.js",
   "author": "Enternovate",

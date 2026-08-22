@@ -73,6 +73,7 @@ async function init() {
   setupSlash();
   setupModelMenus();
   setupDock();
+  setupStudio();
   wireComposerClean();
 
   $('#send').addEventListener('click', onSend);
@@ -792,6 +793,7 @@ function setupSlash() {
 
   const nativeCommands = [
     { name: 'new', desc: 'Start a fresh chat session', native: true, action: newChat },
+    { name: 'studio', desc: 'Toggle Studio: explorer + code editor + live preview', native: true, action: () => toggleStudio() },
   ];
   state.cliCommands = [...nativeCommands, ...state.cliCommands];
   buildChips();
@@ -1080,27 +1082,74 @@ function toggleVisualEdit() {
 const VISUAL_EDIT_SCRIPT = `
 (function(){
   window.__xdEdits = window.__xdEdits || [];
-  var prev = document.getElementById('__xd_overlay');
-  if (prev) prev.remove();
+  var prevStyle = document.getElementById('__xd_style');
+  if (prevStyle) prevStyle.remove();
+  var prevPanel = document.getElementById('__xd_panel');
+  if (prevPanel) prevPanel.remove();
   if (!__MODE__) { return JSON.stringify(window.__xdEdits); }
+
+  var ANIMS = ['fade-in', 'slide-up', 'pop', 'pulse', 'float', 'spin', 'shake'];
   var st = document.createElement('style');
-  st.id = '__xd_overlay';
-  st.textContent = '[__xd-hover]{outline:2px dashed #7170ff !important; cursor:nwse-resize !important;} [__xd-sel]{outline:2px solid #7170ff !important;} #__xd_panel{position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#191a1b;color:#d0d6e0;font:11px/1.5 ui-monospace,monospace;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.5);}#__xd_panel button{margin:2px;padding:3px 7px;background:rgba(255,255,255,.06);color:#d0d6e0;border:1px solid rgba(255,255,255,.15);border-radius:4px;cursor:pointer;font-size:10px;}#__xd_panel .xdv{color:#7170ff;margin:4px 0;}';
+  st.id = '__xd_style';
+  st.textContent = [
+    '[__xd-hover]{outline:2px dashed #7170ff !important; cursor:pointer !important;}',
+    '[__xd-sel]{outline:2px solid #7170ff !important; outline-offset:1px !important;}',
+    '#__xd_panel{position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#16171a;color:#d0d6e0;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;border:1px solid rgba(255,255,255,.14);border-radius:10px;padding:10px;width:240px;max-height:72vh;overflow:auto;box-shadow:0 6px 24px rgba(0,0,0,.55);}',
+    '#__xd_panel .xdt{color:#f7f8f8;font-weight:bold;font-size:12px;}',
+    '#__xd_target{color:#9ba2ff;margin:5px 0;word-break:break-all;min-height:14px;}',
+    '#__xd_panel .xsec{margin-top:7px;padding-top:5px;border-top:1px solid rgba(255,255,255,.09);color:#8b93a7;font-size:9px;text-transform:uppercase;letter-spacing:.08em;}',
+    '#__xd_panel .xrow{display:flex;flex-wrap:wrap;gap:3px;margin:4px 0;align-items:center;}',
+    '#__xd_panel button{padding:3px 7px;background:rgba(255,255,255,.06);color:#d0d6e0;border:1px solid rgba(255,255,255,.16);border-radius:5px;cursor:pointer;font-size:10px;font-family:inherit;}',
+    '#__xd_panel button:hover{background:rgba(113,112,255,.28);border-color:#7170ff;}',
+    '#__xd_panel label{color:#8b93a7;font-size:10px;margin-right:2px;}',
+    '#__xd_panel input[type=color]{width:30px;height:20px;padding:0;border:1px solid rgba(255,255,255,.22);border-radius:4px;background:none;cursor:pointer;}',
+    '@keyframes xd-fade-in{from{opacity:0}to{opacity:1}}',
+    '@keyframes xd-slide-up{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:translateY(0)}}',
+    '@keyframes xd-pop{0%{transform:scale(.35);opacity:0}62%{transform:scale(1.12)}100%{transform:scale(1);opacity:1}}',
+    '@keyframes xd-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.07)}}',
+    '@keyframes xd-float{0%,100%{transform:translateY(0)}50%{transform:translateY(-10px)}}',
+    '@keyframes xd-spin{to{transform:rotate(360deg)}}',
+    '@keyframes xd-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-6px)}75%{transform:translateX(6px)}}',
+    '.xd-anim-fade-in{animation:xd-fade-in .9s ease both !important;}',
+    '.xd-anim-slide-up{animation:xd-slide-up .8s ease both !important;}',
+    '.xd-anim-pop{animation:xd-pop .7s cubic-bezier(.34,1.56,.64,1) both !important;}',
+    '.xd-anim-pulse{animation:xd-pulse 1.6s ease-in-out infinite !important;}',
+    '.xd-anim-float{animation:xd-float 3s ease-in-out infinite !important;}',
+    '.xd-anim-spin{animation:xd-spin 2.4s linear infinite !important;}',
+    '.xd-anim-shake{animation:xd-shake .5s ease-in-out 2 !important;}'
+  ].join('');
   document.head.appendChild(st);
 
   var panel = document.createElement('div');
   panel.id = '__xd_panel';
-  panel.innerHTML = '<b style="color:#f7f8f8">Visual edit</b><br>Pick an element, then adjust.<div class="xdv" id="__xd_target">&lt;none selected&gt;</div>'
-    + '<button data-a="pl-">padding −</button><button data-a="pl+">padding +</button>'
-    + '<button data-a="mt-">margin −</button><button data-a="mt+">margin +</button>'
-    + '<button data-a="gap-">gap −</button><button data-a="gap+">gap +</button>'
-    + '<button data-a="w-">width −</button><button data-a="w+">width +</button>'
-    + '<div style="margin-top:6px"><button data-a="undo">undo last</button><button data-a="send">send to agent</button></div>';
+  var animBtns = ANIMS.map(function(n){ return '<button data-a="anim" data-v="' + n + '">' + n + '</button>'; }).join('');
+  panel.innerHTML =
+    '<div class="xdt">Visual edit</div>'
+    + '<div id="__xd_target">&lt;click an element&gt;</div>'
+    + '<div class="xsec">Element</div>'
+    + '<div class="xrow"><button data-a="text">&#9998; Edit text</button><button data-a="del">&#10005; Delete</button><button data-a="resetmove">&#8634; Un-move</button></div>'
+    + '<div class="xrow"><label>Text</label><input type="color" id="__xd_c1"><label>Fill</label><input type="color" id="__xd_c2"></div>'
+    + '<div class="xsec">Size &amp; spacing</div>'
+    + '<div class="xrow"><button data-a="fs+">A+</button><button data-a="fs-">A&minus;</button><button data-a="rad+">round+</button><button data-a="pl-">pad&minus;</button><button data-a="pl+">pad+</button></div>'
+    + '<div class="xrow"><button data-a="mt-">mar&minus;</button><button data-a="mt+">mar+</button><button data-a="w-">w&minus;</button><button data-a="w+">w+</button><button data-a="gap+">gap+</button><button data-a="gap-">gap&minus;</button></div>'
+    + '<div class="xsec">Animate</div>'
+    + '<div class="xrow">' + animBtns + '</div>'
+    + '<div class="xsec">Apply</div>'
+    + '<div class="xrow"><button data-a="undo">undo last</button><button data-a="clear">clear all</button><button data-a="send" style="background:rgba(113,112,255,.4);border-color:#7170ff;">send to agent</button></div>';
   document.body.appendChild(panel);
 
+  var label = panel.querySelector('#__xd_target');
   var sel = null, hover = null;
+  var dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+  var editingEl = null;
 
-  function tagOf(el){ return el.tagName.toLowerCase() + (el.id ? '#'+el.id : '') + (el.className && typeof el.className==='string' ? '.'+el.className.trim().split(/\\s+/).slice(0,2).join('.') : ''); }
+  function tagOf(el){
+    return el.tagName.toLowerCase()
+      + (el.id ? '#' + el.id : '')
+      + (el.className && typeof el.className === 'string'
+        ? '.' + el.className.trim().split(/\\s+/).filter(function(c){ return c.indexOf('xd-') !== 0; }).slice(0, 2).join('.')
+        : '');
+  }
 
   function px(el, prop){ return parseInt(getComputedStyle(el)[prop], 10) || 0; }
   function setPx(el, prop, delta){
@@ -1113,37 +1162,152 @@ const VISUAL_EDIT_SCRIPT = `
     var entry = window.__xdEdits.find(function(e){ return e.target === t && e.prop === prop; });
     if (entry) entry.value = val;
     else window.__xdEdits.push({ target: t, prop: prop, value: val });
-    panel.querySelector('#__xd_target').textContent = t + ' → ' + prop + ': ' + val;
+    label.textContent = t + ' \u2192 ' + prop + ': ' + val;
+  }
+  function recordOp(el, entry){
+    var t = tagOf(el);
+    var existing = window.__xdEdits.find(function(e){ return e.target === t && e.op === entry.op; });
+    if (existing) Object.assign(existing, entry);
+    else window.__xdEdits.push(Object.assign({ target: t }, entry));
+    label.textContent = t + ' \u2192 ' + (entry.op === 'move' ? 'moved' : entry.op);
+  }
+
+  function syncColourInputs(){
+    if (!sel) return;
+    var cs = getComputedStyle(sel);
+    panel.querySelector('#__xd_c1').value = rgbToHex(cs.color);
+    panel.querySelector('#__xd_c2').value = rgbToHex(cs.backgroundColor);
+  }
+  function rgbToHex(v){
+    var m = /rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/.exec(v || '');
+    if (!m) return '#000000';
+    return '#' + m.slice(1).map(function(x){ return ('0' + parseInt(x, 10).toString(16)).slice(-2); }).join('');
+  }
+
+  function select(el){
+    if (sel) sel.removeAttribute('__xd-sel');
+    sel = el;
+    sel.setAttribute('__xd-sel', '');
+    label.textContent = tagOf(sel);
+    syncColourInputs();
   }
 
   document.addEventListener('mouseover', function(e){
     if (hover) hover.removeAttribute('__xd-hover');
     hover = e.target;
-    if (hover !== document.body) hover.setAttribute('__xd-hover','');
+    if (hover !== document.body && !panel.contains(hover)) hover.setAttribute('__xd-hover', '');
   }, true);
-  document.addEventListener('mouseout', function(){ if(hover) hover.removeAttribute('__xd-hover'); }, true);
+  document.addEventListener('mouseout', function(){ if (hover) hover.removeAttribute('__xd-hover'); }, true);
+
   document.addEventListener('click', function(e){
     if (panel.contains(e.target)) return;
+    if (editingEl || (sel && sel.isContentEditable)) return;
     e.preventDefault(); e.stopPropagation();
-    if (sel) sel.removeAttribute('__xd-sel');
-    sel = e.target;
-    sel.setAttribute('__xd-sel','');
-    panel.querySelector('#__xd_target').textContent = tagOf(sel);
+    select(e.target);
+  }, true);
+
+  /* --- drag selected element to move it --- */
+  document.addEventListener('mousedown', function(e){
+    if (panel.contains(e.target) || !sel || e.button !== 0) return;
+    if (editingEl || (sel && sel.isContentEditable)) return;
+    if (e.target !== sel) return;
+    dragging = true; moved = false;
+    sx = e.clientX; sy = e.clientY;
+    ox = sel.__xdX || 0; oy = sel.__xdY || 0;
+    e.preventDefault();
+  }, true);
+  document.addEventListener('mousemove', function(e){
+    if (!dragging || !sel) return;
+    var dx = e.clientX - sx, dy = e.clientY - sy;
+    if (!moved && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+    moved = true;
+    sel.__xdX = ox + dx; sel.__xdY = oy + dy;
+    sel.style.transform = 'translate(' + sel.__xdX + 'px, ' + sel.__xdY + 'px)';
+  }, true);
+  document.addEventListener('mouseup', function(){
+    if (!dragging) return;
+    dragging = false;
+    if (moved && sel) recordOp(sel, { op: 'move', value: 'translate(' + sel.__xdX + 'px, ' + sel.__xdY + 'px)' });
+  }, true);
+
+  /* --- inline text editing --- */
+  function startTextEdit(){
+    if (!sel) return;
+    editingEl = sel;
+    sel.setAttribute('contenteditable', 'plaintext-only');
+    if (!sel.isContentEditable) sel.setAttribute('contenteditable', 'true');
+    sel.focus();
+    label.textContent = tagOf(sel) + ' \u2014 typing\u2026 click elsewhere to finish';
+  }
+  document.addEventListener('focusout', function(e){
+    if (!editingEl || e.target !== editingEl) return;
+    var t = (editingEl.textContent || '').trim().slice(0, 160);
+    record(editingEl, 'text', t || '(empty)');
+    editingEl.removeAttribute('contenteditable');
+    editingEl = null;
   }, true);
 
   panel.addEventListener('click', function(e){
-    var a = e.target.getAttribute && e.target.getAttribute('data-a');
-    if (!a || !sel) return;
+    var btn = e.target.closest('button[data-a]');
+    if (!btn) return;
     e.preventDefault(); e.stopPropagation();
+    var a = btn.getAttribute('data-a');
+    if (a === 'undo'){ window.__xdEdits.pop(); label.textContent = '(' + window.__xdEdits.length + ' edits queued)'; return; }
+    if (a === 'clear'){ window.__xdEdits.length = 0; label.textContent = '(edits cleared)'; return; }
+    if (a === 'send'){ window.__XD_SEND = true; return; }
+    if (a === 'text'){ startTextEdit(); return; }
+    if (!sel) { label.textContent = 'select an element first'; return; }
+    if (a === 'del'){
+      recordOp(sel, { op: 'delete' });
+      sel.removeAttribute('__xd-sel');
+      sel.remove();
+      sel = null;
+      return;
+    }
+    if (a === 'resetmove'){
+      sel.style.transform = '';
+      sel.__xdX = 0; sel.__xdY = 0;
+      record(sel, 'transform', 'none');
+      return;
+    }
     var map = { 'pl+': ['padding-left', 4], 'pl-': ['padding-left', -4],
                 'mt+': ['margin-top', 4], 'mt-': ['margin-top', -4],
                 'w+': ['width', 20], 'w-': ['width', -20] };
-    if (a in map) setPx(sel, map[a][0], map[a][1]);
-    else if (a === 'gap+' || a === 'gap-'){
-      if (sel.style.gap) { var g = parseInt(sel.style.gap)||0; g += (a==='gap+'?4:-4); sel.style.gap = Math.max(0,g)+'px'; record(sel,'gap',Math.max(0,g)+'px'); }
-      else { sel.style.gap = (a==='gap+'?'8px':'0px'); record(sel,'gap',sel.style.gap); }
-    } else if (a === 'undo'){ window.__xdEdits.pop(); }
-      else if (a === 'send'){ window.__XD_SEND = true; }
+    if (a in map) { setPx(sel, map[a][0], map[a][1]); return; }
+    if (a === 'fs+' || a === 'fs-'){
+      var fs = Math.max(8, px(sel, 'fontSize') + (a === 'fs+' ? 2 : -2));
+      sel.style.fontSize = fs + 'px';
+      record(sel, 'fontSize', fs + 'px');
+      return;
+    }
+    if (a === 'rad+'){
+      var r = px(sel, 'borderRadius') + 4;
+      sel.style.borderRadius = r + 'px';
+      record(sel, 'borderRadius', r + 'px');
+      return;
+    }
+    if (a === 'gap+' || a === 'gap-'){
+      var g = (parseInt(sel.style.gap, 10) || 0) + (a === 'gap+' ? 4 : -4);
+      g = Math.max(0, g);
+      sel.style.gap = g + 'px';
+      record(sel, 'gap', g + 'px');
+      return;
+    }
+    if (a === 'anim'){
+      var name = btn.getAttribute('data-v');
+      for (var i = 0; i < ANIMS.length; i++) sel.classList.remove('xd-anim-' + ANIMS[i]);
+      void sel.offsetWidth; /* restart animation */
+      sel.classList.add('xd-anim-' + name);
+      record(sel, 'animation', name);
+      return;
+    }
+  });
+
+  panel.querySelector('#__xd_c1').addEventListener('input', function(e){
+    if (sel) { sel.style.color = e.target.value; record(sel, 'color', e.target.value); }
+  });
+  panel.querySelector('#__xd_c2').addEventListener('input', function(e){
+    if (sel) { sel.style.backgroundColor = e.target.value; record(sel, 'backgroundColor', e.target.value); }
   });
 
   setInterval(function(){
@@ -1151,7 +1315,7 @@ const VISUAL_EDIT_SCRIPT = `
       window.__XD_SEND = false;
       window.__xdDone = JSON.stringify(window.__xdEdits);
     }
-  }, 400);
+  }, 300);
   return JSON.stringify([]);
 })();
 `;
@@ -1175,13 +1339,274 @@ setInterval(pollDockEdits, 1200);
 
 function sendEditsToAgent(edits) {
   if (!edits.length) return;
-  const lines = edits.map((e) => `- \`${e.target}\` → set \`${e.prop}: ${e.value}\``).join('\n');
+  const lines = edits.map((e) => {
+    if (e.op === 'delete') return `- \`${e.target}\` → DELETE this element entirely`;
+    if (e.op === 'move') return `- \`${e.target}\` → offset it with \`transform: ${e.value}\``;
+    return `- \`${e.target}\` → set \`${e.prop}: ${e.value}\``;
+  }).join('\n');
   const msg = `I adjusted the running preview visually. Apply these exact changes to the project's source code:\n${lines}\nUpdate the relevant source files/styles so the change is permanent, then confirm.`;
   switchView('chat');
   const input = $('#input');
   input.value = msg;
   autosize();
   input.focus();
+}
+
+/* ---------------- studio IDE layout (explorer · editor · preview) ---------------- */
+
+const studio = {
+  open: false,
+  root: null,
+  expanded: {},
+  selectedDir: null,
+  tabs: [],
+  activePath: null,
+};
+
+function toggleStudio(force) {
+  const want = typeof force === 'boolean' ? force : !studio.open;
+  if (want === studio.open) return;
+  studio.open = want;
+  $('#app').classList.toggle('studio', studio.open);
+  $('#explorer').classList.toggle('hidden', !studio.open);
+  if (studio.open) {
+    switchView('studio');
+    if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+    loadWorkspaceRoot();
+  } else {
+    switchView('chat');
+    $('#input').focus();
+  }
+  setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 80);
+}
+
+function setupStudio() {
+  $('#explorer-exit').addEventListener('click', () => toggleStudio(false));
+  $('#ws-root-go').addEventListener('click', setWorkspaceRoot);
+  $('#ws-root').addEventListener('keydown', (e) => { if (e.key === 'Enter') setWorkspaceRoot(); });
+  $('#fs-refresh').addEventListener('click', () => renderTree(studio.root));
+  $('#fs-newfile').addEventListener('click', () => fsCreate('newfile'));
+  $('#fs-newdir').addEventListener('click', () => fsCreate('mkdir'));
+  $('#editor-save').addEventListener('click', saveActiveFile);
+
+  const editor = $('#editor');
+  editor.addEventListener('input', () => {
+    const tab = activeTab();
+    if (tab) {
+      tab.dirty = true;
+      tab.content = editor.value;
+      renderTabs();
+    }
+    syncGutter();
+  });
+  editor.addEventListener('scroll', () => {
+    $('#editor-gutter').scrollTop = editor.scrollTop;
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const mod = e.metaKey || e.ctrlKey;
+    if (!mod) return;
+    const k = e.key.toLowerCase();
+    if (e.shiftKey && k === 's') { e.preventDefault(); toggleStudio(); }
+    else if (!e.shiftKey && k === 's' && studio.open && studio.activePath) { e.preventDefault(); saveActiveFile(); }
+  });
+}
+
+async function setWorkspaceRoot() {
+  const p = $('#ws-root').value.trim();
+  if (!p) return;
+  try {
+    const res = await dapi('/desktop/api/fs/root', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ root: p }),
+    });
+    const d = await res.json();
+    if (d.error) { treeError(d.error); return; }
+    studio.root = d.root;
+    studio.expanded = {};
+    studio.selectedDir = null;
+    renderTree(studio.root);
+  } catch (err) { treeError(String(err)); }
+}
+
+async function loadWorkspaceRoot() {
+  try {
+    const res = await dapi('/desktop/api/fs/root');
+    const d = await res.json();
+    studio.root = d.root;
+    $('#ws-root').value = d.root;
+    renderTree(d.root);
+  } catch { treeError('Backend unreachable'); }
+}
+
+function treeError(msg) { $('#file-tree').innerHTML = `<div class="empty">${escapeHtml(msg)}</div>`; }
+
+function cssEscape(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : String(s).replace(/["\\]/g, '\\$&'); }
+
+async function renderTree(dir) {
+  if (!dir) return;
+  const box = $('#file-tree');
+  try {
+    const res = await dapi(`/desktop/api/fs/tree?path=${encodeURIComponent(dir)}`);
+    const d = await res.json();
+    if (d.error) { if (dir === studio.root) treeError(d.error); return; }
+    const container = dir === studio.root ? box : box.querySelector(`[data-dir="${cssEscape(dir)}"]`);
+    if (!container) return;
+    container.innerHTML = '';
+    if (dir === studio.root) {
+      const rootRow = document.createElement('div');
+      rootRow.className = 'tree-row root-row';
+      rootRow.innerHTML = `<span class="tw">▾</span><span class="tname" title="${escapeHtml(d.path)}">${escapeHtml(d.path.split('/').filter(Boolean).pop() || d.path)}</span>`;
+      container.appendChild(rootRow);
+    }
+    for (const ent of d.entries) container.appendChild(treeRow(d.path, ent));
+  } catch (err) { if (dir === studio.root) treeError(String(err)); }
+}
+
+function treeRow(parentPath, ent) {
+  const full = parentPath.replace(/\/$/, '') + '/' + ent.name;
+  const row = document.createElement('div');
+  row.className = 'tree-row';
+  row.dataset.path = full;
+  row.dataset.type = ent.type;
+  const arrow = ent.type === 'dir' ? (studio.expanded[full] ? '▾' : '▸') : '·';
+  row.innerHTML = `<span class="tw">${arrow}</span><span class="tname" title="${escapeHtml(full)}">${escapeHtml(ent.name)}</span><button class="t-del" title="Delete">×</button>`;
+  row.addEventListener('click', (e) => {
+    if (e.target.classList.contains('t-del')) return;
+    studio.selectedDir = ent.type === 'dir' ? full : parentPath;
+    if (ent.type === 'dir') toggleDir(row, full);
+    else openFile(full);
+  });
+  row.querySelector('.t-del').addEventListener('click', async () => {
+    if (!confirm(`Delete ${ent.name}?`)) return;
+    try {
+      await dapi('/desktop/api/fs/mutate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ op: 'delete', path: full }),
+      });
+      closeTabsUnder(full);
+      renderTree(studio.root);
+    } catch (err) { treeError(String(err)); }
+  });
+  return row;
+}
+
+async function toggleDir(row, full) {
+  const existing = $('#file-tree').querySelector(`[data-dir="${cssEscape(full)}"]`);
+  if (existing) {
+    delete studio.expanded[full];
+    existing.remove();
+    row.querySelector('.tw').textContent = '▸';
+    return;
+  }
+  studio.expanded[full] = true;
+  row.querySelector('.tw').textContent = '▾';
+  const childBox = document.createElement('div');
+  childBox.className = 'tree-children';
+  childBox.dataset.dir = full;
+  if (row.nextElementSibling) row.parentElement.insertBefore(childBox, row.nextElementSibling);
+  else row.parentElement.appendChild(childBox);
+  await renderTree(full);
+}
+
+function closeTabsUnder(path) {
+  const prefix = path.replace(/\/$/, '') + '/';
+  const dead = studio.tabs.filter((t) => t.path.startsWith(prefix));
+  if (!dead.length) return;
+  studio.tabs = studio.tabs.filter((t) => !dead.includes(t));
+  if (dead.some((t) => t.path === studio.activePath)) {
+    activateTab(studio.tabs.length ? studio.tabs[studio.tabs.length - 1].path : '');
+  } else renderTabs();
+}
+
+/* ----- editor tabs ----- */
+
+function activeTab() { return studio.tabs.find((t) => t.path === studio.activePath) || null; }
+
+async function openFile(path) {
+  if (studio.tabs.find((t) => t.path === path)) { activateTab(path); return; }
+  try {
+    const res = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(path)}`);
+    const d = await res.json();
+    if (d.error) { $('#save-state').textContent = d.error; return; }
+    studio.tabs.push({ path, name: path.split('/').pop(), content: d.content, dirty: false });
+    activateTab(path);
+  } catch (err) { $('#save-state').textContent = String(err); }
+}
+
+function activateTab(path) {
+  studio.activePath = path || null;
+  const tab = activeTab();
+  $('#editor-empty').style.display = tab ? 'none' : '';
+  $('#editor').style.display = tab ? '' : 'none';
+  $('#editor-gutter').style.display = tab ? '' : 'none';
+  $('#editor').value = tab ? tab.content : '';
+  renderTabs();
+  syncGutter();
+}
+
+function renderTabs() {
+  const wrap = $('#editor-tabs');
+  wrap.innerHTML = '';
+  for (const t of studio.tabs) {
+    const el = document.createElement('div');
+    el.className = `tab${t.path === studio.activePath ? ' active' : ''}`;
+    el.title = t.path;
+    el.innerHTML = `<span class="tab-name">${escapeHtml(t.name)}${t.dirty ? ' •' : ''}</span><span class="tab-close">×</span>`;
+    el.addEventListener('click', (e) => {
+      if (e.target.classList.contains('tab-close')) return;
+      activateTab(t.path);
+    });
+    el.querySelector('.tab-close').addEventListener('click', () => {
+      studio.tabs = studio.tabs.filter((x) => x !== t);
+      if (studio.activePath === t.path) activateTab(studio.tabs.length ? studio.tabs[studio.tabs.length - 1].path : '');
+      else renderTabs();
+    });
+    wrap.appendChild(el);
+  }
+}
+
+function syncGutter() {
+  const lines = Math.max($('#editor').value.split('\n').length, 1);
+  let out = '';
+  for (let i = 1; i <= lines; i++) out += i + '\n';
+  const g = $('#editor-gutter');
+  g.textContent = out;
+  g.scrollTop = $('#editor').scrollTop;
+}
+
+async function saveActiveFile() {
+  const tab = activeTab();
+  if (!tab) return;
+  tab.content = $('#editor').value;
+  try {
+    const res = await dapi('/desktop/api/fs/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: tab.path, content: tab.content }),
+    });
+    const d = await res.json();
+    if (d.error) { $('#save-state').textContent = d.error; return; }
+    tab.dirty = false;
+    $('#save-state').textContent = `Saved ${new Date().toLocaleTimeString()}`;
+    renderTabs();
+  } catch (err) { $('#save-state').textContent = String(err); }
+}
+
+function fsCreate(op) {
+  const base = studio.selectedDir || studio.root;
+  if (!base) return;
+  const name = prompt(op === 'mkdir' ? 'New folder name:' : 'New file name:');
+  if (!name || name.includes('/')) return;
+  dapi('/desktop/api/fs/mutate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ op, path: base.replace(/\/$/, '') + '/' + name }),
+  })
+    .then(() => renderTree(base))
+    .catch((err) => treeError(String(err)));
 }
 
 /* ---------------- migration view ---------------- */

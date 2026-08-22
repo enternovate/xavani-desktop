@@ -760,6 +760,148 @@ def build_desktop_app(api_port: int):
     async def skills(_request: "web.Request") -> "web.Response":
         return web.json_response({"skills": _installed_skills()})
 
+    # ---------------- studio IDE: filesystem endpoints ----------------
+    #
+    # All paths are resolved and MUST stay inside the user's home directory.
+    # The server binds to 127.0.0.1 only; this guard is defence-in-depth so a
+    # stray page can't probe arbitrary absolute paths through the desktop API.
+    _HOME = Path.home().resolve()
+    _TREE_SKIP = {"node_modules", ".git", "__pycache__", ".venv", "venv",
+                  "dist-electron", ".cache", ".DS_Store"}
+
+    def _ws_state_path() -> Path:
+        return _xavani_home() / "desktop-workspace.json"
+
+    def _safe_path(raw: str) -> Path:
+        p = Path(str(raw)).expanduser()
+        if not p.is_absolute():
+            p = _ws_state_path_root() / p
+        rp = p.resolve()
+        if not str(rp).startswith(str(_HOME)):
+            raise ValueError(f"path outside home directory: {rp}")
+        return rp
+
+    def _ws_state_path_root() -> Path:
+        try:
+            data = json.loads(_ws_state_path().read_text(encoding="utf-8"))
+            root = _safe_path(data.get("root", ""))
+            if root.is_dir():
+                return root
+        except Exception:
+            pass
+        fallback = _HOME / "Desktop" / "enternovate-builds"
+        return fallback if fallback.is_dir() else _HOME
+
+    @routes.get("/desktop/api/fs/root")
+    async def fs_root_get(_request: "web.Request") -> "web.Response":
+        return web.json_response({"root": str(_ws_state_path_root())})
+
+    @routes.post("/desktop/api/fs/root")
+    async def fs_root_set(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+            root = _safe_path(body.get("root", ""))
+            if not root.is_dir():
+                return web.json_response({"error": f"not a directory: {root}"}, status=400)
+            _ws_state_path().parent.mkdir(parents=True, exist_ok=True)
+            _ws_state_path().write_text(json.dumps({"root": str(root)}), encoding="utf-8")
+            return web.json_response({"ok": True, "root": str(root)})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+
+    @routes.get("/desktop/api/fs/tree")
+    async def fs_tree(request: "web.Request") -> "web.Response":
+        raw = request.query.get("path") or str(_ws_state_path_root())
+        try:
+            base = _safe_path(raw)
+            if not base.exists():
+                return web.json_response({"error": f"not found: {base}"}, status=404)
+            entries = []
+            try:
+                for child in sorted(base.iterdir(), key=lambda c: (c.is_file(), c.name.lower())):
+                    if child.name in _TREE_SKIP or child.name.startswith("."):
+                        continue
+                    try:
+                        stat = child.stat()
+                        entries.append({
+                            "name": child.name,
+                            "type": "dir" if child.is_dir() else "file",
+                            "size": stat.st_size,
+                        })
+                    except OSError:
+                        continue
+            except PermissionError:
+                pass
+            return web.json_response({"path": str(base), "entries": entries})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    _MAX_FILE_BYTES = 2 * 1024 * 1024
+
+    @routes.get("/desktop/api/fs/file")
+    async def fs_file(request: "web.Request") -> "web.Response":
+        try:
+            path = _safe_path(request.query.get("path", ""))
+            if not path.is_file():
+                return web.json_response({"error": f"not a file: {path}"}, status=404)
+            size = path.stat().st_size
+            if size > _MAX_FILE_BYTES:
+                return web.json_response({"error": f"file too large ({size} bytes)"}, status=413)
+            blob = path.read_bytes()
+            try:
+                text = blob.decode("utf-8")
+            except UnicodeDecodeError:
+                return web.json_response({"error": "binary file — not editable here"}, status=415)
+            return web.json_response({"path": str(path), "content": text, "size": size})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    @routes.post("/desktop/api/fs/write")
+    async def fs_write(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+            path = _safe_path(body.get("path", ""))
+            content = str(body.get("content", ""))
+            if len(content.encode("utf-8")) > _MAX_FILE_BYTES:
+                return web.json_response({"error": "content too large"}, status=413)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            return web.json_response({"ok": True, "path": str(path), "bytes": len(content.encode("utf-8"))})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+
+    @routes.post("/desktop/api/fs/mutate")
+    async def fs_mutate(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+            op = str(body.get("op", ""))
+            path = _safe_path(body.get("path", ""))
+            if op == "mkdir":
+                path.mkdir(parents=True, exist_ok=True)
+            elif op == "newfile":
+                path.touch(exist_ok=False)
+            elif op == "delete":
+                if path.is_dir():
+                    shutil.rmtree(path)
+                else:
+                    path.unlink(missing_ok=True)
+            elif op == "rename":
+                dest = _safe_path(body.get("to", ""))
+                path.rename(dest)
+            else:
+                return web.json_response({"error": f"unknown op: {op}"}, status=400)
+            return web.json_response({"ok": True, "op": op, "path": str(path)})
+        except FileExistsError:
+            return web.json_response({"error": "already exists"}, status=409)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+
     app = web.Application()
     app.add_routes(routes)
     return app

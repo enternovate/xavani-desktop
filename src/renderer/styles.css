@@ -550,3 +550,108 @@ webview { width: 100%; height: 100%; border: none; display: block; }
 }
 #reconnect .rc-title { font-size: 15px; font-weight: 590; color: var(--text-primary); }
 #reconnect .rc-sub { font-size: 13px; color: var(--text-tertiary); font-family: var(--font-mono); }
+
+/* ---------------- studio IDE layout (explorer · editor · preview) ---------------- */
+
+#explorer {
+  display: none;
+  flex-direction: column;
+  width: 232px;
+  min-width: 232px;
+  background: var(--bg-secondary, #0e0f11);
+  border-right: 1px solid var(--border-subtle);
+}
+#app.studio #explorer { display: flex; }
+#app.studio #sidebar { display: none; }
+
+.explorer-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px 8px;
+}
+.explorer-title {
+  font-size: 11px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--text-tertiary);
+}
+.explorer-root { display: flex; gap: 6px; padding: 0 12px 8px; }
+.explorer-root input {
+  flex: 1; min-width: 0; font-size: 11px; padding: 5px 8px;
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle);
+  border-radius: 6px; color: var(--text-primary); outline: none;
+}
+.explorer-root input:focus { border-color: rgba(113,112,255,0.5); }
+.explorer-actions { display: flex; gap: 6px; padding: 0 12px 8px; border-bottom: 1px solid var(--border-subtle); }
+.mini-btn {
+  font-size: 10.5px; padding: 3px 7px; cursor: pointer;
+  background: rgba(255,255,255,0.04); color: var(--text-secondary);
+  border: 1px solid var(--border-subtle); border-radius: 5px;
+}
+.mini-btn:hover { background: rgba(113,112,255,0.18); border-color: var(--accent-bright, #7170ff); color: var(--text-primary); }
+
+#file-tree { flex: 1; overflow-y: auto; padding: 6px 4px 20px; font-size: 12.5px; }
+.tree-row {
+  display: flex; align-items: center; gap: 5px;
+  padding: 3px 8px; border-radius: 5px; cursor: pointer;
+  color: var(--text-secondary); user-select: none; position: relative;
+}
+.tree-row:hover { background: rgba(255,255,255,0.05); color: var(--text-primary); }
+.tree-row.root-row { color: var(--accent-bright, #9ba2ff); font-weight: 600; margin-bottom: 2px; }
+.tree-row .tw { width: 12px; text-align: center; color: var(--text-quaternary); flex-shrink: 0; }
+.tree-row[data-type="dir"] .tname { font-weight: 500; }
+.tree-row .tname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tree-row .t-del {
+  display: none; border: none; background: none; color: var(--text-quaternary);
+  cursor: pointer; font-size: 13px; padding: 0 3px; line-height: 1;
+}
+.tree-row:hover .t-del { display: block; }
+.tree-row .t-del:hover { color: var(--red, #ff6b6b); }
+.tree-children { margin-left: 14px; }
+
+/* studio view (middle editor) */
+#view-studio { padding: 0; }
+#studio-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 6px 10px; border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-secondary, #0e0f11);
+}
+#editor-tabs { display: flex; gap: 2px; overflow-x: auto; min-height: 26px; }
+.tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px 4px 12px; font-size: 12px; white-space: nowrap;
+  color: var(--text-tertiary); border-radius: 6px; cursor: pointer;
+  border: 1px solid transparent;
+}
+.tab:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+.tab.active {
+  color: var(--text-primary); background: rgba(113,112,255,0.12);
+  border-color: rgba(113,112,255,0.35);
+}
+.tab-close { opacity: 0.55; padding: 0 2px; }
+.tab-close:hover { opacity: 1; color: var(--red, #ff6b6b); }
+.studio-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+#save-state { font-size: 11px; }
+
+#editor-wrap { position: relative; flex: 1; display: flex; min-height: 0; background: #0b0c0e; }
+#editor-gutter {
+  width: 46px; flex-shrink: 0; overflow: hidden;
+  padding: 10px 8px 10px 0; text-align: right;
+  font-size: 12px; line-height: 1.55; color: var(--text-quaternary);
+  background: #0b0c0e; border-right: 1px solid var(--border-subtle);
+  user-select: none;
+}
+#editor {
+  flex: 1; resize: none; border: none; outline: none;
+  padding: 10px 14px; font-size: 12.5px; line-height: 1.55;
+  color: var(--text-primary); background: transparent;
+  tab-size: 2; white-space: pre; overflow: auto;
+}
+#editor-empty {
+  position: absolute; inset: 0; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; pointer-events: none;
+}
+#studio-help {
+  padding: 5px 12px; font-size: 10.5px; color: var(--text-quaternary);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* dock preview keeps its place on the far right in studio mode */
+#app.studio #dock { border-left: 1px solid var(--border-subtle); }
