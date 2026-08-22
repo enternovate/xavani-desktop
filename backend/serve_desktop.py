@@ -375,6 +375,306 @@ def build_desktop_app(api_port: int):
         asyncio.get_running_loop().call_later(0.2, os.kill, os.getpid(), signal.SIGTERM)
         return web.json_response({"ok": True})
 
+    # ---------------- model / provider management ----------------
+
+    PROVIDERS = [
+        {"id": "openrouter", "label": "OpenRouter", "env": "OPENROUTER_API_KEY",
+         "models": ["anthropic/claude-sonnet-4", "anthropic/claude-opus-4", "openai/gpt-5", "google/gemini-2.5-pro", "deepseek/deepseek-chat-v3"]},
+        {"id": "anthropic", "label": "Anthropic", "env": "ANTHROPIC_API_KEY",
+         "models": ["claude-sonnet-4-20250514", "claude-opus-4-20250514", "claude-haiku-4"]},
+        {"id": "openai", "label": "OpenAI", "env": "OPENAI_API_KEY",
+         "models": ["gpt-5", "gpt-5-mini", "gpt-4.1", "o3"]},
+        {"id": "google", "label": "Google Gemini", "env": "GOOGLE_API_KEY",
+         "models": ["gemini-2.5-pro", "gemini-2.5-flash"]},
+        {"id": "deepseek", "label": "DeepSeek", "env": "DEEPSEEK_API_KEY",
+         "models": ["deepseek-chat", "deepseek-reasoner"]},
+        {"id": "xai", "label": "xAI Grok", "env": "XAI_API_KEY",
+         "models": ["grok-4", "grok-3-mini"]},
+        {"id": "groq", "label": "Groq", "env": "GROQ_API_KEY",
+         "models": ["llama-3.3-70b-versatile"]},
+        {"id": "mistral", "label": "Mistral", "env": "MISTRAL_API_KEY",
+         "models": ["mistral-large-latest"]},
+        {"id": "moonshot", "label": "Kimi / Moonshot", "env": "MOONSHOT_API_KEY",
+         "models": ["kimi-k2-0711-preview"]},
+        {"id": "zai", "label": "Z.AI / GLM", "env": "ZAI_API_KEY",
+         "models": ["glm-4.6"]},
+        {"id": "nous", "label": "Nous Portal (OAuth)", "env": "", "models": []},
+        {"id": "custom", "label": "Custom endpoint", "env": "", "models": []},
+    ]
+
+    @routes.get("/desktop/api/providers")
+    async def providers_list(_request: "web.Request") -> "web.Response":
+        cfg = _load_config()
+        model_cfg = cfg.get("model") or {}
+        return web.json_response({
+            "providers": PROVIDERS,
+            "current": {
+                "provider": model_cfg.get("provider"),
+                "model": model_cfg.get("default"),
+                "base_url": model_cfg.get("base_url"),
+            },
+        })
+
+    def _upsert_env(key: str, value: str) -> None:
+        env_path = _xavani_home() / ".env"
+        lines = []
+        if env_path.exists():
+            lines = [l for l in env_path.read_text(encoding="utf-8").splitlines()
+                     if l.strip() and not l.strip().startswith(f"{key}=")]
+        lines.append(f"{key}={value}")
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    @routes.post("/desktop/api/model/set")
+    async def model_set(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+            provider = str(body.get("provider", "")).strip()
+            if not provider:
+                return web.json_response({"error": "provider required"}, status=400)
+            model = str(body.get("model", "")).strip() or None
+            api_key = str(body.get("api_key", "")).strip() or None
+            base_url = str(body.get("base_url", "")).strip() or None
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+
+        meta = next((p for p in PROVIDERS if p["id"] == provider), None)
+        config_path = _xavani_home() / "config.yaml"
+        try:
+            from ruamel.yaml import YAML
+
+            yaml = YAML(typ="rt")
+            yaml.preserve_quotes = True
+            data = yaml.load(config_path) if config_path.exists() else {}
+            if data is None:
+                data = {}
+            mc = data.setdefault("model", {})
+            mc["provider"] = provider
+            if model:
+                mc["default"] = model
+            if base_url:
+                mc["base_url"] = base_url
+            elif "base_url" in mc and provider != "custom":
+                del mc["base_url"]
+            with open(config_path, "w", encoding="utf-8") as fh:
+                yaml.dump(data, fh)
+        except Exception as exc:
+            return web.json_response({"error": f"config write failed: {exc}"}, status=500)
+
+        key_written = None
+        if api_key and meta and meta.get("env"):
+            try:
+                _upsert_env(meta["env"], api_key)
+                key_written = meta["env"]
+            except Exception as exc:
+                return web.json_response({"error": f"key write failed: {exc}"}, status=500)
+
+        return web.json_response({
+            "ok": True,
+            "provider": provider,
+            "model": model,
+            "key_written": key_written,
+            "note": "Applies to new chats.",
+        })
+
+    # ---------------- skills hub (GitHub-backed) ----------------
+
+    @routes.get("/desktop/api/skills/hub/search")
+    async def skills_hub_search(request: "web.Request") -> "web.Response":
+        q = request.query.get("q", "").strip()
+        result = await _run_cli(["skills", "search", q] if q else ["skills", "browse"], timeout=120)
+        return web.json_response(result)
+
+    @routes.post("/desktop/api/skills/hub/install")
+    async def skills_hub_install(request: "web.Request") -> "web.Response":
+        body = await request.json()
+        skill_id = str(body.get("id", "")).strip()
+        if not skill_id:
+            return web.json_response({"error": "id required"}, status=400)
+        result = await _run_cli(["skills", "install", skill_id], timeout=300)
+        return web.json_response(result)
+
+    @routes.post("/desktop/api/skills/uninstall")
+    async def skills_uninstall(request: "web.Request") -> "web.Response":
+        body = await request.json()
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return web.json_response({"error": "name required"}, status=400)
+        result = await _run_cli(["skills", "uninstall", name], timeout=180)
+        return web.json_response(result)
+
+    # ---------------- migration (memory + transcripts) ----------------
+
+    MIGRATION_SOURCES = {
+        "claude_code": {"home": Path.home() / ".claude", "globs": ["projects/**/*.jsonl"]},
+        "codex": {"home": Path.home() / ".codex", "globs": ["sessions/**/*.jsonl", "*.jsonl"]},
+        "hermes": {"home": Path.home() / ".hermes", "globs": ["sessions/**/*.jsonl", "terminal-sessions/**/*.jsonl"]},
+        "cursor": {"home": Path.home() / "Library" / "Application Support" / "Cursor", "globs": []},
+    }
+
+    def _memory_files(home: Path) -> list[str]:
+        out = []
+        if not home.exists():
+            return out
+        seen_names = set()
+        for name in ("CLAUDE.md", "AGENTS.md", "SOUL.md", "MEMORY.md"):
+            candidate = home / name
+            if candidate.exists() and candidate.stat().st_size > 0:
+                out.append(str(candidate))
+                seen_names.add(name)
+        for candidate in sorted(home.glob("*.md")):
+            if candidate.name not in seen_names and candidate.stat().st_size > 0:
+                out.append(str(candidate))
+                seen_names.add(candidate.name)
+        return out[:12]
+
+    def _count_transcripts(src: str, spec: dict) -> int:
+        home, globs = spec["home"], spec["globs"]
+        n = 0
+        if src == "hermes" and (home / "sessions.db").exists() and (home / "sessions.db").stat().st_size > 0:
+            n += 1
+        for g in globs:
+            if home.exists():
+                n += sum(1 for f in home.glob(g) if f.is_file())
+        return n
+
+    @routes.get("/desktop/api/migrate/scan")
+    async def migrate_scan(_request: "web.Request") -> "web.Response":
+        report = {}
+        for src, spec in MIGRATION_SOURCES.items():
+            report[src] = {
+                "found": spec["home"].exists(),
+                "transcripts": _count_transcripts(src, spec),
+                "memory_files": _memory_files(spec["home"]),
+            }
+        return web.json_response(report)
+
+    def _slug(text: str, n: int = 40) -> str:
+        keep = re.sub(r"[^a-zA-Z0-9]+", "-", text).strip("-").lower()
+        return keep[:n] or "session"
+
+    def _extract_jsonl_messages(path: Path) -> list[tuple[str, str]]:
+        msgs = []
+        try:
+            for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if not raw.strip():
+                    continue
+                try:
+                    d = json.loads(raw)
+                except Exception:
+                    continue
+                mtype = d.get("type")
+                role = None
+                content = None
+                if mtype in ("user", "assistant"):
+                    role = mtype
+                    c = d.get("content") or (d.get("message") or {}).get("content")
+                    if isinstance(c, list):
+                        content = " ".join(p.get("text", "") for p in c if isinstance(p, dict) and p.get("type") == "text")
+                    elif isinstance(c, str):
+                        content = c
+                elif mtype == "message" and isinstance(d.get("content"), list):
+                    role = d.get("role", "user")
+                    content = " ".join(
+                        p.get("text", "") if isinstance(p, dict) else str(p)
+                        for p in d["content"]
+                    )
+                elif mtype == "response_item" and isinstance(d.get("payload"), dict):
+                    p = d["payload"]
+                    if p.get("type") == "message":
+                        role = p.get("role", "user")
+                        c = p.get("content")
+                        if isinstance(c, list):
+                            content = " ".join(
+                                pp.get("text", "") for pp in c
+                                if isinstance(pp, dict) and pp.get("type") in ("text", "input_text", "output_text")
+                            )
+                        elif isinstance(c, str):
+                            content = c
+                if role in ("user", "assistant") and content and content.strip():
+                    msgs.append((role, content.strip()))
+        except OSError:
+            pass
+        return msgs
+
+    @routes.post("/desktop/api/migrate/import")
+    async def migrate_import(request: "web.Request") -> "web.Response":
+        body = await request.json()
+        src = str(body.get("source", ""))
+        spec = MIGRATION_SOURCES.get(src)
+        if not spec:
+            return web.json_response({"error": "unknown source"}, status=400)
+        home = spec["home"]
+        imported_sessions = 0
+        imported_msgs = 0
+        copied_files = 0
+
+        from xavani_state import SessionDB
+
+        db = SessionDB()
+
+        files: list[Path] = []
+        seen: set[Path] = set()
+        for g in spec["globs"]:
+            if home.exists() and g:
+                for f in sorted(home.glob(g)):
+                    if f.is_file() and f.resolve() not in seen:
+                        seen.add(f.resolve())
+                        files.append(f)
+
+        def label_for(source: str) -> str:
+            return MIG_LABELS.get(source, source)
+
+        for f in files:
+            msgs = _extract_jsonl_messages(f)
+            if len(msgs) < 2:
+                continue
+            first_user = next(
+                (c for r, c in msgs if r == "user" and not c.lstrip().startswith("<")),
+                next((c for r, c in msgs if r == "user"), "Imported transcript"),
+            )
+            sid = f"imp_{src[:4]}_{_slug(f.stem)}_{abs(hash(str(f))) % 100000}"
+            if db.get_session(sid):
+                continue
+            try:
+                db.ensure_session(sid, source=f"import:{src}")
+                db.rename_session(sid, f"[{label_for(src)}] {first_user[:70]}")
+            except Exception:
+                pass
+            ok = True
+            for role, content in msgs[:200]:
+                try:
+                    db.append_message(sid, role, content[:24000])
+                    imported_msgs += 1
+                except Exception:
+                    ok = False
+                    break
+            if not ok:
+                continue
+            imported_sessions += 1
+
+        mem_dir = _xavani_home() / "memory-imports" / src
+        mem_dir.mkdir(parents=True, exist_ok=True)
+        index_lines = [f"# Imported memory — {src}", ""]
+        for mp in _memory_files(home):
+            srcf = Path(mp)
+            dest = mem_dir / srcf.name
+            try:
+                dest.write_text(srcf.read_text(encoding="utf-8"), encoding="utf-8")
+                copied_files += 1
+                index_lines.append(f"- {dest.name}")
+            except OSError:
+                continue
+        if copied_files or imported_sessions:
+            (mem_dir / "INDEX.md").write_text("\n".join(index_lines) + "\n", encoding="utf-8")
+
+        return web.json_response({
+            "ok": True,
+            "source": src,
+            "sessions": imported_sessions,
+            "messages": imported_msgs,
+            "memory_files": copied_files,
+        })
+
     @routes.get("/desktop/api/status")
     async def status(_request: "web.Request") -> "web.Response":
         cfg = _load_config()
@@ -459,11 +759,6 @@ def build_desktop_app(api_port: int):
     @routes.get("/desktop/api/skills")
     async def skills(_request: "web.Request") -> "web.Response":
         return web.json_response({"skills": _installed_skills()})
-
-    @routes.post("/desktop/api/shutdown")
-    async def shutdown(_request: "web.Request") -> "web.Response":
-        asyncio.get_running_loop().call_later(0.2, os.kill, os.getpid(), signal.SIGTERM)
-        return web.json_response({"ok": True})
 
     app = web.Application()
     app.add_routes(routes)

@@ -131,7 +131,16 @@ body {
   margin-top: 18px; padding: 0 8px 6px;
   font-size: 11px; font-weight: 510; letter-spacing: 0.02em;
   text-transform: uppercase; color: var(--text-quaternary);
+  display: flex; align-items: center; justify-content: space-between;
 }
+.sessions-toggle {
+  font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.05em;
+  color: var(--text-quaternary); background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-subtle); border-radius: 9999px;
+  padding: 1px 7px; cursor: pointer; text-transform: uppercase;
+}
+.sessions-toggle:hover { color: var(--text-tertiary); }
+.sessions-toggle.on { color: var(--accent-bright); border-color: rgba(113,112,255,0.4); background: rgba(113,112,255,0.1); }
 #sessions { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; padding-bottom: 6px; }
 .session-item {
   display: flex; align-items: center; gap: 8px; width: 100%;
@@ -332,6 +341,102 @@ body.mac #topbar { padding-left: 84px; }
   display: flex; font-size: 11px; color: var(--text-quaternary);
   padding: 0 2px; min-height: 15px;
 }
+
+/* ---------- Sidebar (mac traffic-light clearance) ---------- */
+body.mac #sidebar { padding-top: 40px; }
+
+/* ---------- Topbar chips as buttons ---------- */
+.chip-btn { cursor: pointer; font-family: inherit; font-feature-settings: 'cv01','ss03'; }
+.chip-btn:hover { color: var(--text-primary); border-color: rgba(113,112,255,0.45); }
+
+/* dropdown menus */
+.menu {
+  position: fixed; z-index: 70;
+  background: var(--bg-surface); border: 1px solid var(--border-standard);
+  border-radius: 10px; min-width: 260px; max-height: 340px; overflow-y: auto;
+  box-shadow: rgba(0,0,0,0.4) 0px 2px 4px, rgba(0,0,0,0.2) 0px 0px 0px 1px;
+  display: none; padding: 4px;
+}
+.menu.open { display: block; }
+.menu-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 12px; border-radius: 6px; cursor: pointer;
+  font-size: 13px; color: var(--text-secondary);
+}
+.menu-item:hover { background: rgba(113,112,255,0.12); color: var(--text-primary); }
+.menu-item .check { width: 14px; color: var(--accent-bright); flex-shrink: 0; }
+.menu-sep { border-top: 1px solid var(--border-subtle); margin: 4px 6px; }
+
+/* ---------- right IDE dock ---------- */
+#dock { display: none; }
+#app.dock-open #dock { display: flex; }
+#dock {
+  width: 46%; min-width: 380px; border-left: 1px solid var(--border-subtle);
+  background: var(--bg-panel); flex-direction: column;
+}
+.dock-bar {
+  display: flex; gap: 6px; align-items: center; padding: 8px 10px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+#dock-url {
+  flex: 1; background: rgba(255,255,255,0.03); border: 1px solid var(--border-standard);
+  border-radius: 6px; color: var(--text-primary); font-size: 11.5px; padding: 5px 9px; outline: none;
+}
+#dock-url:focus { border-color: rgba(113,112,255,0.5); }
+.dock-body { position: relative; flex: 1; min-height: 0; background: #101114; }
+webview { width: 100%; height: 100%; border: none; display: block; }
+#dock-hint { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; pointer-events: none; }
+.dock-editing #dock-hint { display: none; }
+#dock.edit-active .dock-bar #dock-edit { background: rgba(113,112,255,0.2); border-color: var(--accent-bright); color: var(--accent-bright); }
+
+/* ---------- modal ---------- */
+#modal-backdrop {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(1,1,2,0.7); backdrop-filter: blur(3px);
+  display: flex; align-items: center; justify-content: center;
+}
+#modal {
+  width: 420px; background: var(--bg-surface);
+  border: 1px solid var(--border-standard); border-radius: 12px; padding: 20px 22px;
+  box-shadow: rgba(0,0,0,0.5) 0px 8px 24px;
+}
+.modal-title { font-size: 15px; font-weight: 590; letter-spacing: -0.15px; color: var(--text-primary); margin-bottom: 16px; }
+.fld { display: block; margin-bottom: 13px; }
+.fld span { display: block; font-size: 11px; font-weight: 510; letter-spacing: 0.02em; text-transform: uppercase; color: var(--text-quaternary); margin-bottom: 5px; }
+.fld input, .fld select {
+  width: 100%; background: rgba(255,255,255,0.03); border: 1px solid var(--border-standard);
+  border-radius: 6px; color: var(--text-primary); font-family: inherit; font-size: 13px;
+  padding: 8px 10px; outline: none;
+}
+.fld input:focus, .fld select:focus { border-color: rgba(113,112,255,0.55); }
+.fld select option { background: var(--bg-surface); }
+.modal-err { color: var(--red); font-size: 12px; margin: -4px 0 10px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+
+/* ---------- clean results: collapsed activity ---------- */
+.activity { margin: 2px 0 8px; }
+.activity > summary {
+  cursor: pointer; list-style: none; display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; font-weight: 510; color: var(--text-quaternary);
+  background: rgba(255,255,255,0.03); border: 1px solid var(--border-subtle);
+  border-radius: 9999px; padding: 3px 10px;
+}
+.activity > summary::-webkit-details-marker { display: none; }
+.activity > summary:hover { color: var(--text-tertiary); }
+.activity[open] > summary { margin-bottom: 6px; }
+.msg-assistant .bubble + .activity, .activity + .bubble { margin-top: 8px; }
+
+/* ---------- import view ---------- */
+.mig-card {
+  background: rgba(255,255,255,0.02); border: 1px solid var(--border-subtle);
+  border-radius: 10px; padding: 14px 16px; margin-bottom: 10px;
+}
+.mig-head { display: flex; align-items: center; gap: 10px; }
+.mig-name { font-size: 13.5px; font-weight: 590; color: var(--text-primary); }
+.mig-stats { font-size: 12px; color: var(--text-tertiary); margin-left: auto; }
+.mig-files { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-quaternary); margin-top: 6px; word-break: break-all; }
+.mig-actions { margin-top: 10px; display: flex; gap: 8px; align-items: center; }
+.mig-result { font-size: 12px; color: var(--green); }
 
 /* ---------- Console ---------- */
 #view-console { background: var(--bg-panel); }

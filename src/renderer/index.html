@@ -49,8 +49,11 @@
         <button class="nav-item" data-view="status">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 8.5 5 11l7-8" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Status</button>
+        <button class="nav-item" data-view="import">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2v7m0 0L4.5 6.5M7 9l2.5-2.5M2.5 11.5h9" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Import</button>
       </nav>
-      <div class="sessions-head">Recent</div>
+      <div class="sessions-head">Recent<button id="toggle-cli" class="sessions-toggle" title="Show sessions from your terminal CLI">CLI</button></div>
       <div id="sessions"></div>
       <div class="sidebar-foot">
         <span class="dot" id="health-dot"></span>
@@ -62,8 +65,12 @@
       <header id="topbar">
         <div id="topbar-title">Chat</div>
         <div class="topbar-right">
-          <span class="chip" id="chip-provider">—</span>
-          <span class="chip mono" id="chip-model">—</span>
+          <button class="chip chip-btn" id="chip-provider">—</button>
+          <button class="chip chip-btn mono" id="chip-model">—</button>
+          <button class="chip chip-btn" id="dock-toggle" title="Toggle preview dock">
+            <svg width="10" height="10" viewBox="0 0 12 12" fill="none" style="vertical-align:-1px"><rect x="1" y="1.5" width="10" height="9" rx="1.5" stroke="currentColor"/><path d="M7.5 1.5v9" stroke="currentColor"/></svg>
+            Preview
+          </button>
         </div>
       </header>
 
@@ -114,7 +121,45 @@
         <div id="terminal-host"><div class="empty" style="padding-top:80px">Connecting to engine console…</div></div>
       </section>
       <section id="view-status" class="view"><div class="panel-wrap"><div id="status-panel" class="panel-list"></div></div></section>
+      <section id="view-import" class="view"><div class="panel-wrap"><div id="import-panel" class="panel-list"></div></div></section>
     </main>
+
+    <aside id="dock">
+      <div class="dock-bar">
+        <input id="dock-url" class="mono" placeholder="http://localhost:3000" value="http://localhost:3000">
+        <button id="dock-go" class="btn ghost sm">Go</button>
+        <button id="dock-edit" class="btn ghost sm" title="Visual edit: click elements, drag spacing, then send changes to the agent">Visual edit</button>
+        <button id="dock-close" class="btn ghost sm" title="Close preview">×</button>
+      </div>
+      <div class="dock-body">
+        <webview id="dock-webview" src="http://localhost:3000" allowpopups></webview>
+        <div id="dock-hint" class="empty">Preview your running app or website here.<br><br>Start a dev server (e.g. <span class="mono">npm run dev</span>) in a project, enter its URL above, and hit Go.<br>Use <b>Visual edit</b> to adjust spacing and layout by hand, then send the changes to the agent.</div>
+      </div>
+    </aside>
+
+    <div id="modal-backdrop" class="hidden">
+      <div id="modal" role="dialog">
+        <div class="modal-title" id="modal-title">Model &amp; provider</div>
+        <label class="fld"><span>Provider</span>
+          <select id="mf-provider"></select>
+        </label>
+        <label class="fld"><span>Model</span>
+          <input id="mf-model" list="mf-model-list" placeholder="provider/model or model id" autocomplete="off">
+          <datalist id="mf-model-list"></datalist>
+        </label>
+        <label class="fld"><span>API key <em id="mf-key-note" class="dim"></em></span>
+          <input id="mf-key" type="password" placeholder="paste key (stored in .env)">
+        </label>
+        <label class="fld hidden" id="mf-url-row"><span>Base URL</span>
+          <input id="mf-url" class="mono" placeholder="https://api.example.com/v1">
+        </label>
+        <div class="modal-err hidden" id="mf-err"></div>
+        <div class="modal-actions">
+          <button class="btn ghost sm" id="mf-cancel">Cancel</button>
+          <button class="btn primary sm" id="mf-save">Save</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script src="vendor/marked.min.js"></script>
