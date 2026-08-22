@@ -158,15 +158,26 @@
     </main>
 
     <aside id="dock">
+      <div id="dock-resize" title="Drag to resize — double-click to reset"></div>
       <div class="dock-bar">
         <input id="dock-url" class="mono" placeholder="http://localhost:3000" value="http://localhost:3000">
         <button id="dock-go" class="btn ghost sm">Go</button>
         <button id="dock-edit" class="btn ghost sm" title="Visual edit: click elements, drag spacing, then send changes to the agent">Visual edit</button>
         <button id="dock-close" class="btn ghost sm" title="Close preview">×</button>
       </div>
+      <div id="dock-tabs"></div>
       <div class="dock-body">
         <webview id="dock-webview" src="http://localhost:3000" allowpopups></webview>
-        <div id="dock-hint" class="empty">Preview your running app or website here.<br><br>Start a dev server (e.g. <span class="mono">npm run dev</span>) in a project, enter its URL above, and hit Go.<br>Use <b>Visual edit</b> to adjust spacing and layout by hand, then send the changes to the agent.</div>
+        <div id="dock-fileview" class="hidden">
+          <div id="dock-filepath" class="mono"></div>
+          <div id="dock-filescroll">
+            <div class="dock-file-inner">
+              <pre id="dock-filegutter" class="mono"></pre>
+              <pre id="dock-filecode" class="mono"></pre>
+            </div>
+          </div>
+        </div>
+        <div id="dock-hint" class="empty">Preview your running app or website here.<br><br>Start a dev server (e.g. <span class="mono">npm run dev</span>) in a project, enter its URL above, and hit Go.<br>Use <b>Visual edit</b> to adjust spacing and layout by hand, then send the changes to the agent.<br><br><span class="mono dim">/flip</span> switches between this preview and files the agent is writing.</div>
       </div>
     </aside>
 
