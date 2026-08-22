@@ -636,7 +636,7 @@ webview { width: 100%; height: 100%; border: none; display: block; }
   padding: 10px 8px 10px 0; text-align: right;
   font-size: 12px; line-height: 1.55; color: var(--text-quaternary);
   background: #0b0c0e; border-right: 1px solid var(--border-subtle);
-  user-select: none;
+  user-select: none; white-space: pre;
 }
 #editor {
   flex: 1; resize: none; border: none; outline: none;
