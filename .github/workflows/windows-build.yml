@@ -71,6 +71,21 @@ jobs:
           Pop-Location
           uv pip install --python backend\runtime\python.exe -r reqs.txt aiohttp
 
+      - name: Checkout constellation products
+        uses: actions/checkout@v4
+        with: { repository: enternovate/gavaza, path: const/gavaza }
+      - uses: actions/checkout@v4
+        with: { repository: enternovate/nyarhi, path: const/nyarhi }
+      - uses: actions/checkout@v4
+        with: { repository: enternovate/mhangani, path: const/mhangani }
+      - uses: actions/checkout@v4
+        with: { repository: enternovate/constellation-mcp, path: const/constellation-mcp }
+
+      - name: Install constellation products + pty support
+        shell: pwsh
+        run: |
+          uv pip install --python backend\runtime\python.exe .\const\gavaza .\const\nyarhi .\const\mhangani .\const\constellation-mcp pywinpty
+
       - name: Build Windows installers
         shell: pwsh
         run: npx electron-builder --win --x64

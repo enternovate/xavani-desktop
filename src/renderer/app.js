@@ -10,10 +10,12 @@ const state = {
   sessionId: null,
   running: false,
   currentController: null,
+  currentRunId: null,
   messages: [],
   status: null,
   activeView: 'chat',
   activeSessionItem: null,
+  cliCommands: [],
 };
 
 const api = (p, opts) => fetch(`http://127.0.0.1:${state.apiPort}${p}`, opts);
@@ -61,6 +63,11 @@ async function init() {
 
   await refreshStatus();
   await refreshSessions();
+  dapi('/desktop/api/cli/commands').then((r) => r.json()).then((d) => {
+    state.cliCommands = d.commands || [];
+    buildChips();
+  }).catch(() => {});
+  setupSlash();
 
   $('#send').addEventListener('click', onSend);
   $('#stop').addEventListener('click', onStop);
@@ -451,6 +458,8 @@ function switchView(name) {
   if (name === 'skills') loadSkills();
   if (name === 'cron') loadCron();
   if (name === 'status') loadStatus();
+  if (name === 'constellation') loadConstellation();
+  if (name === 'console') ensureConsole();
 }
 
 function cardEl(name, desc, meta, action) {
@@ -591,5 +600,270 @@ async function loadStatus() {
     warn.style.color = 'var(--amber)';
     warn.textContent = 'No model configured yet — run `xavani setup` in a terminal, or set config.yaml.';
     box.appendChild(warn);
+  }
+}
+
+/* ---------------- console (full CLI via PTY) ---------------- */
+
+const termState = { term: null, sock: null, fit: null, booted: false, pending: [] };
+
+function buildChips() {
+  const box = $('#cli-chips');
+  box.innerHTML = '';
+  for (const c of state.cliCommands) {
+    const b = document.createElement('button');
+    b.className = 'chip-cmd';
+    b.textContent = c.name;
+    b.title = c.desc;
+    b.addEventListener('click', () => {
+      switchView('console');
+      ensureConsole();
+      consoleSendLine(c.args.join(' '));
+    });
+    box.appendChild(b);
+  }
+}
+
+function ensureConsole() {
+  if (termState.booted) {
+    setTimeout(() => { try { termState.fit.fit(); } catch {} }, 30);
+    return;
+  }
+  if (typeof Terminal === 'undefined' || typeof FitAddon === 'undefined') return;
+  termState.booted = true;
+  const host = $('#terminal-host');
+  host.innerHTML = '';
+
+  const term = new Terminal({
+    fontFamily: "'JetBrains Mono Variable', ui-monospace, SFMono-Regular, Menlo, monospace",
+    fontSize: 12.5,
+    lineHeight: 1.25,
+    cursorBlink: true,
+    allowProposedApi: true,
+    scrollback: 5000,
+    theme: {
+      background: '#0f1011',
+      foreground: '#d0d6e0',
+      cursor: '#7170ff',
+      cursorAccent: '#08090a',
+      selectionBackground: 'rgba(113,112,255,0.30)',
+      black: '#191a1b',
+      brightBlack: '#62666d',
+      green: '#10b981',
+      red: '#eb5757',
+      brightBlue: '#828fff',
+      blue: '#7170ff',
+    },
+  });
+  const fit = new FitAddon.FitAddon();
+  term.loadAddon(fit);
+  term.open(host);
+  try { fit.fit(); } catch {}
+
+  const sock = new WebSocket(`ws://127.0.0.1:${state.desktopPort}/desktop/term`);
+  sock.onopen = () => {
+    sock.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+    for (const line of termState.pending.splice(0)) consoleSendLine(line);
+  };
+  sock.onmessage = (ev) => { if (term) term.write(ev.data); };
+  sock.onclose = () => {
+    if (term) term.write('\r\n\x1b[38;5;245m[console session closed — switch views and back to restart]\x1b[0m\r\n');
+  };
+  sock.onerror = () => {};
+  term.onData((d) => {
+    if (sock.readyState === WebSocket.OPEN) sock.send(JSON.stringify({ type: 'input', data: d }));
+  });
+
+  const refit = () => {
+    try {
+      fit.fit();
+      if (sock.readyState === WebSocket.OPEN) {
+        sock.send(JSON.stringify({ type: 'resize', cols: term.cols, rows: term.rows }));
+      }
+    } catch {}
+  };
+  window.addEventListener('resize', refit);
+  new ResizeObserver(refit).observe(host);
+
+  termState.term = term;
+  termState.sock = sock;
+  termState.fit = fit;
+  term.focus();
+}
+
+function consoleSendLine(line) {
+  if (!line) return;
+  if (!termState.sock || termState.sock.readyState !== WebSocket.OPEN) {
+    ensureConsole();
+    termState.pending.push(line);
+    return;
+  }
+  termState.sock.send(JSON.stringify({ type: 'input', data: `${line}\r` }));
+  if (termState.term) termState.term.focus();
+}
+
+/* ---------------- slash command routing ---------------- */
+
+function setupSlash() {
+  const input = $('#input');
+  const menu = document.createElement('div');
+  menu.className = 'slash-menu';
+  document.body.appendChild(menu);
+
+  let items = [];
+  let sel = 0;
+
+  const renderMenu = () => {
+    menu.innerHTML = '';
+    items.slice(0, 8).forEach((c, i) => {
+      const el = document.createElement('div');
+      el.className = `slash-item${i === sel ? ' sel' : ''}`;
+      el.innerHTML = `<span class="s-cmd">/${c.name}</span><span class="s-desc">${escapeHtml(c.desc || '')}</span>`;
+      el.addEventListener('click', () => pickCommand(c));
+      menu.appendChild(el);
+    });
+  };
+  const position = () => {
+    const r = input.getBoundingClientRect();
+    menu.style.left = `${r.left}px`;
+    menu.style.bottom = `${window.innerHeight - r.top + 6}px`;
+    menu.style.width = `${Math.max(r.width, 380)}px`;
+  };
+  const closeMenu = () => { menu.classList.remove('open'); items = []; };
+  const openMenu = () => {
+    const q = input.value.slice(1).toLowerCase();
+    items = state.cliCommands.filter((c) => c.name.toLowerCase().includes(q));
+    if (!items.length) { closeMenu(); return; }
+    sel = 0;
+    renderMenu();
+    position();
+    menu.classList.add('open');
+  };
+  const pickCommand = (c) => {
+    input.value = '';
+    closeMenu();
+    autosize();
+    if (c.native) { c.action(); return; }
+    switchView('console');
+    ensureConsole();
+    consoleSendLine(c.args.join(' '));
+  };
+
+  input.addEventListener('input', () => {
+    const v = input.value;
+    if (v.startsWith('/') && !v.includes(' ') && state.cliCommands.length) openMenu();
+    else closeMenu();
+  });
+  input.addEventListener('keydown', (e) => {
+    if (!menu.classList.contains('open')) return;
+    if (e.key === 'ArrowDown') { sel = Math.min(sel + 1, Math.min(items.length, 8) - 1); renderMenu(); e.preventDefault(); }
+    else if (e.key === 'ArrowUp') { sel = Math.max(sel - 1, 0); renderMenu(); e.preventDefault(); }
+    else if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); if (items[sel]) pickCommand(items[sel]); }
+    else if (e.key === 'Escape') closeMenu();
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target) && e.target !== input) closeMenu();
+  });
+
+  const nativeCommands = [
+    { name: 'new', desc: 'Start a fresh chat session', native: true, action: newChat },
+  ];
+  state.cliCommands = [...nativeCommands, ...state.cliCommands];
+  buildChips();
+}
+
+/* ---------------- constellation panel ---------------- */
+
+const CONST_PRODUCTS = [
+  {
+    name: 'Gavaza', tag: 'POPIA',
+    desc: 'POPIA compliance toolkit for South African organisations — eight conditions, PAIA manual, privacy policy, breach register with a 72-hour checklist.',
+    repo: 'https://github.com/enternovate/gavaza',
+  },
+  {
+    name: 'Nyarhi', tag: 'Knowledge graph',
+    desc: 'Local-first knowledge graph — nodes, edges, paths, GraphML and JSON/SQLite stores. The memory layer of the Enternovate constellation.',
+    repo: 'https://github.com/enternovate/nyarhi',
+  },
+  {
+    name: 'Mhangani', tag: 'Web audit',
+    desc: 'Ethical web security audit — headers, TLS, cookies and CORS checked against OWASP-aligned expectations, scored 0-100. Passive and authorized.',
+    repo: 'https://github.com/enternovate/mhangani',
+  },
+];
+
+function loadConstellation() {
+  const box = $('#constellation-panel');
+  box.innerHTML = '<div class="panel-title">Constellation</div><div class="panel-desc">Gavaza · Nyarhi · Mhangani — sixteen tools exposed to the agent through the constellation MCP server.</div>';
+
+  const grid = document.createElement('div');
+  grid.className = 'const-grid';
+  for (const p of CONST_PRODUCTS) {
+    const card = document.createElement('div');
+    card.className = 'const-card';
+    card.innerHTML = `<div class="c-name">${p.name}<span class="c-tag">${p.tag}</span></div><div class="c-desc">${p.desc}</div>`;
+    const actions = document.createElement('div');
+    actions.className = 'c-actions';
+    const repoBtn = document.createElement('button');
+    repoBtn.className = 'btn ghost sm';
+    repoBtn.textContent = 'Repository';
+    repoBtn.addEventListener('click', () => window.xavaniDesktop.openExternal(p.repo));
+    actions.appendChild(repoBtn);
+    card.appendChild(actions);
+    grid.appendChild(card);
+  }
+  box.appendChild(grid);
+
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap';
+  const mkBtn = (label, fn, cls = 'ghost') => {
+    const b = document.createElement('button');
+    b.className = `btn ${cls} sm`;
+    b.textContent = label;
+    b.addEventListener('click', fn);
+    return b;
+  };
+  row.appendChild(mkBtn('Status', () => constCommand('status')));
+  row.appendChild(mkBtn('Doctor', () => constCommand('doctor')));
+  row.appendChild(mkBtn('Install / repair', () => constCommand('install'), 'primary'));
+  row.appendChild(mkBtn('Enable in agent', enableConstellation));
+  box.appendChild(row);
+
+  const out = document.createElement('pre');
+  out.className = 'const-out';
+  out.id = 'const-out';
+  out.textContent = 'Run Status / Doctor / Install here — or open the Console for the full CLI.';
+  box.appendChild(out);
+}
+
+async function constCommand(sub) {
+  const out = $('#const-out');
+  if (!out) return;
+  out.textContent = `Running: xavani constellation ${sub} …`;
+  try {
+    const res = await dapi('/desktop/api/cli', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ args: ['constellation', sub], timeout: 300 }),
+    });
+    const d = await res.json();
+    out.textContent = (d.output || '(no output)') + (d.exit_code ? `\n(exit code ${d.exit_code})` : '');
+  } catch (err) {
+    out.textContent = `failed: ${err}`;
+  }
+}
+
+async function enableConstellation() {
+  const out = $('#const-out');
+  try {
+    const res = await dapi('/desktop/api/constellation/enable', { method: 'POST' });
+    const d = await res.json();
+    if (out) {
+      out.textContent = d.ok
+        ? `Constellation MCP server registered in config.yaml\ncommand: ${d.command}\n\nStart a New chat to pick up all sixteen gavaza_* · nyarhi_* · mhangani_* tools.`
+        : `failed: ${d.error}`;
+    }
+  } catch (err) {
+    if (out) out.textContent = `failed: ${err}`;
   }
 }
