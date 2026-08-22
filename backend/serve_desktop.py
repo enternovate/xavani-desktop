@@ -237,6 +237,20 @@ def build_desktop_app(api_port: int):
     async def cli_commands(_request: "web.Request") -> "web.Response":
         return web.json_response({"commands": CLI_COMMANDS})
 
+    @routes.get("/desktop/api/commands")
+    async def commands_registry(_request: "web.Request") -> "web.Response":
+        try:
+            from xavani_cli.commands import COMMAND_REGISTRY
+            cmds = [{
+                "name": c.name,
+                "desc": (c.description or "")[:160],
+                "args_hint": c.args_hint or "",
+                "category": c.category or "",
+            } for c in COMMAND_REGISTRY]
+        except Exception as exc:
+            return web.json_response({"commands": [], "error": str(exc)})
+        return web.json_response({"commands": cmds})
+
     @routes.post("/desktop/api/cli")
     async def cli_run(request: "web.Request") -> "web.Response":
         try:
