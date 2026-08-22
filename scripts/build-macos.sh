@@ -75,6 +75,17 @@ REQS=$(mktemp)
 uv pip install --python "$RES/backend/runtime/bin/python${PYVER}" -r "$REQS" aiohttp --quiet
 rm -f "$REQS"
 
+echo "==> Constellation products (gavaza, nyarhi, mhangani, mcp)"
+CONST_DIR="${XAVANI_CONSTELLATION_SRC:-$HOME/constellation-builds}"
+for p in gavaza nyarhi mhangani constellation-mcp; do
+  if [ -d "$CONST_DIR/$p" ]; then
+    uv pip install --python "$RES/backend/runtime/bin/python${PYVER}" "$CONST_DIR/$p" --quiet \
+      || echo "WARN: $p failed to install from $CONST_DIR/$p"
+  else
+    echo "WARN: $CONST_DIR/$p missing — skipping"
+  fi
+done
+
 echo "==> Ad-hoc code signing"
 codesign --force --deep --sign - "$APP" 2>/dev/null
 

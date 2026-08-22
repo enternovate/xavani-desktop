@@ -333,6 +333,65 @@ body.mac #topbar { padding-left: 84px; }
   padding: 0 2px; min-height: 15px;
 }
 
+/* ---------- Console ---------- */
+#view-console { background: var(--bg-panel); }
+.console-toolbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 20px; border-bottom: 1px solid var(--border-subtle);
+  overflow-x: auto; flex-shrink: 0;
+}
+.console-toolbar::-webkit-scrollbar { height: 0; }
+#cli-chips { display: flex; gap: 6px; }
+.chip-cmd {
+  font-family: var(--font-mono); font-size: 11px; font-weight: 500;
+  color: var(--text-tertiary); background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border-subtle); border-radius: 9999px;
+  padding: 4px 11px; cursor: pointer; white-space: nowrap;
+  transition: color 0.12s, border-color 0.12s;
+}
+.chip-cmd:hover { color: var(--accent-bright); border-color: rgba(113,112,255,0.4); }
+#terminal-host { flex: 1; min-height: 0; padding: 8px 12px 12px; }
+#terminal-host .terminal { font-family: var(--font-mono); }
+
+/* ---------- Slash autocomplete ---------- */
+.slash-menu {
+  position: fixed; z-index: 60;
+  background: var(--bg-surface); border: 1px solid var(--border-standard);
+  border-radius: 10px; box-shadow: rgba(0,0,0,0.4) 0px 2px 4px, rgba(0,0,0,0.2) 0px 0px 0px 1px;
+  max-height: 280px; overflow-y: auto; width: 380px; display: none;
+}
+.slash-menu.open { display: block; }
+.slash-item {
+  padding: 8px 14px; cursor: pointer; display: flex; align-items: baseline; gap: 10px;
+}
+.slash-item .s-cmd { font-family: var(--font-mono); font-size: 12.5px; color: var(--text-primary); }
+.slash-item .s-desc { font-size: 11.5px; color: var(--text-quaternary); }
+.slash-item:hover, .slash-item.sel { background: rgba(113, 112, 255, 0.12); }
+.slash-item.sel .s-cmd { color: var(--accent-bright); }
+
+/* ---------- Constellation ---------- */
+.const-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px; margin-bottom: 16px; }
+.const-card {
+  background: rgba(255,255,255,0.02); border: 1px solid var(--border-subtle);
+  border-radius: 10px; padding: 14px 16px;
+}
+.const-card:hover { background: rgba(255,255,255,0.035); }
+.const-card .c-name { font-size: 14px; font-weight: 590; letter-spacing: -0.1px; color: var(--text-primary); display: flex; align-items: center; gap: 8px; }
+.const-card .c-tag {
+  font-size: 10px; font-weight: 510; letter-spacing: 0.02em; color: var(--accent-bright);
+  background: rgba(113,112,255,0.12); border: 1px solid rgba(113,112,255,0.25);
+  padding: 1px 7px; border-radius: 9999px;
+}
+.const-card .c-desc { font-size: 12.5px; color: var(--text-tertiary); margin-top: 6px; line-height: 1.5; }
+.const-card .c-actions { display: flex; gap: 6px; margin-top: 12px; }
+.const-out {
+  background: var(--bg-canvas); border: 1px solid var(--border-standard);
+  border-radius: var(--radius-card); padding: 14px 16px;
+  font-family: var(--font-mono); font-size: 12px; line-height: 1.55;
+  color: var(--text-secondary); white-space: pre-wrap; user-select: text;
+  max-height: 420px; overflow: auto;
+}
+
 /* ---------- Panels (tools/skills/cron/status) ---------- */
 .panel-wrap { flex: 1; overflow-y: auto; padding: 28px 0; }
 .panel-list { max-width: 860px; margin: 0 auto; padding: 0 32px; }

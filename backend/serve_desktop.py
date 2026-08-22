@@ -17,6 +17,8 @@ import asyncio
 import json
 import os
 import re
+import shlex
+import shutil
 import signal
 import socket
 import sys
@@ -172,6 +174,199 @@ def build_desktop_app(api_port: int):
     from aiohttp import web
 
     routes = web.RouteTableDef()
+
+    CLI_COMMANDS = [
+        {"name": "doctor", "args": ["doctor"], "desc": "Check dependencies, config and health"},
+        {"name": "status", "args": ["status"], "desc": "Component status overview"},
+        {"name": "config", "args": ["config"], "desc": "Show current configuration"},
+        {"name": "insights", "args": ["insights"], "desc": "Usage analytics"},
+        {"name": "tools list", "args": ["tools", "list"], "desc": "All toolsets and their state"},
+        {"name": "skills list", "args": ["skills", "list"], "desc": "Installed skills"},
+        {"name": "cron list", "args": ["cron", "list"], "desc": "Scheduled jobs"},
+        {"name": "sessions list", "args": ["sessions", "list"], "desc": "Recent sessions"},
+        {"name": "mcp list", "args": ["mcp", "list"], "desc": "Configured MCP servers"},
+        {"name": "profile list", "args": ["profile", "list"], "desc": "Agent profiles"},
+        {"name": "memory status", "args": ["memory", "status"], "desc": "Memory provider status"},
+        {"name": "constellation status", "args": ["constellation", "status"], "desc": "Gavaza / Nyarhi / Mhangani status"},
+        {"name": "constellation doctor", "args": ["constellation", "doctor"], "desc": "Verify the constellation install"},
+    ]
+
+    def _runtime_bin(name: str) -> str:
+        packaged = Path(__file__).resolve().parent / "runtime" / "bin" / name
+        if packaged.exists():
+            return str(packaged)
+        found = shutil.which(name)
+        return found or name
+
+    async def _run_cli(args: list[str], timeout: float) -> dict:
+        # No resolve(): sys.executable may be a venv symlink and we need the
+        # venv's own bin dir (console scripts), not the base interpreter's.
+        bindir = str(Path(sys.executable).parent)
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(ENGINE_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+        }
+        # Route through xavani_cli.main directly: xavani.py's delegation set
+        # omits several subcommands (doctor, insights, mcp, constellation) and
+        # would treat them as chat queries.
+        code = "import sys; sys.argv = ['xavani'] + sys.argv[1:]; from xavani_cli.main import main; main()"
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", code, *args,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=str(Path.home()),
+            env=env,
+        )
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout)
+            return {"exit_code": proc.returncode, "output": out.decode("utf-8", "replace")[-60000:]}
+        except asyncio.TimeoutError:
+            proc.kill()
+            await proc.wait()
+            return {"exit_code": -1, "output": f"timed out after {int(timeout)}s"}
+
+    @routes.get("/desktop/api/cli/commands")
+    async def cli_commands(_request: "web.Request") -> "web.Response":
+        return web.json_response({"commands": CLI_COMMANDS})
+
+    @routes.post("/desktop/api/cli")
+    async def cli_run(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+            args = [str(a) for a in (body.get("args") or [])][:48]
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        if not args or any(a.startswith("-") and len(a) > 2 and "\x00" in a for a in args):
+            return web.json_response({"error": "bad args"}, status=400)
+        timeout = min(float(body.get("timeout", 180)), 600.0)
+        result = await _run_cli(args, timeout)
+        return web.json_response(result)
+
+    @routes.get("/desktop/term")
+    async def ws_term(request: "web.Request") -> "web.StreamResponse":
+        from aiohttp import WSMsgType, web as _web
+
+        ws = _web.WebSocketResponse(heartbeat=30)
+        await ws.prepare(request)
+
+        if os.name != "posix":
+            await ws.send_json({"type": "exit", "reason": "interactive terminal requires pywinpty on Windows; one-shot commands still work"})
+            await ws.close()
+            return ws
+
+        import fcntl
+        import pty
+        import struct
+        import termios
+
+        shell_path = Path(__file__).resolve().parent / "cli_shell.py"
+        env = {
+            **os.environ,
+            "TERM": "xterm-256color",
+            "PYTHONPATH": str(ENGINE_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "PYTHONUNBUFFERED": "1",
+        }
+
+        pid, fd = pty.fork()
+        if pid == 0:
+            os.chdir(Path.home())
+            os.execve(sys.executable, [sys.executable, str(shell_path)], env)
+
+        def set_size(cols: int, rows: int) -> None:
+            try:
+                fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", max(rows, 2), max(cols, 2), 0, 0))
+            except OSError:
+                pass
+        set_size(100, 30)
+
+        loop = asyncio.get_running_loop()
+        closed = asyncio.Event()
+
+        def on_readable() -> None:
+            try:
+                data = os.read(fd, 65536)
+            except BlockingIOError:
+                return
+            except OSError:
+                loop.remove_reader(fd)
+                closed.set()
+                return
+            if not data:
+                loop.remove_reader(fd)
+                closed.set()
+                return
+            asyncio.create_task(_pump_send(data))
+
+        async def _pump_send(data: bytes) -> None:
+            try:
+                await ws.send_str(data.decode("utf-8", "replace"))
+            except Exception:
+                loop.remove_reader(fd)
+                closed.set()
+
+        loop.add_reader(fd, on_readable)
+
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.TEXT:
+                    try:
+                        d = json.loads(msg.data)
+                    except Exception:
+                        continue
+                    kind = d.get("type")
+                    if kind == "input" and isinstance(d.get("data"), str):
+                        os.write(fd, d["data"].encode("utf-8"))
+                    elif kind == "resize":
+                        set_size(int(d.get("cols", 100)), int(d.get("rows", 30)))
+                elif msg.type == WSMsgType.ERROR:
+                    break
+        finally:
+            try:
+                loop.remove_reader(fd)
+            except Exception:
+                pass
+            if not closed.is_set():
+                closed.set()
+            try:
+                os.kill(pid, signal.SIGHUP)
+            except Exception:
+                pass
+            try:
+                os.close(fd)
+            except Exception:
+                pass
+        return ws
+
+    @routes.get("/desktop/api/constellation/status")
+    async def constellation_status(_request: "web.Request") -> "web.Response":
+        result = await _run_cli(["constellation", "status"], timeout=90)
+        return web.json_response(result)
+
+    @routes.post("/desktop/api/constellation/enable")
+    async def constellation_enable(_request: "web.Request") -> "web.Response":
+        config_path = _xavani_home() / "config.yaml"
+        command = _runtime_bin("constellation-mcp")
+        try:
+            from ruamel.yaml import YAML
+
+            yaml = YAML(typ="rt")
+            yaml.preserve_quotes = True
+            data = yaml.load(config_path) if config_path.exists() else {}
+            if data is None:
+                data = {}
+            servers = data.setdefault("mcp_servers", {})
+            servers["constellation"] = {"command": command, "args": [], "env": {}}
+            with open(config_path, "w", encoding="utf-8") as fh:
+                yaml.dump(data, fh)
+            return web.json_response({"ok": True, "command": command})
+        except Exception as exc:
+            return web.json_response({"ok": False, "error": str(exc)}, status=500)
+
+    @routes.post("/desktop/api/shutdown")
+    async def shutdown(_request: "web.Request") -> "web.Response":
+        asyncio.get_running_loop().call_later(0.2, os.kill, os.getpid(), signal.SIGTERM)
+        return web.json_response({"ok": True})
 
     @routes.get("/desktop/api/status")
     async def status(_request: "web.Request") -> "web.Response":
