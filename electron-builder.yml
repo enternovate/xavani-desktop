@@ -2,6 +2,8 @@ appId: com.enternovate.xavani
 productName: Xavani
 copyright: Enternovate
 
+publish: null
+
 directories:
   output: dist
   buildResources: build
