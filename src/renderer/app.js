@@ -19,10 +19,24 @@ const state = {
   showCli: false,
   lastSessions: [],
   providers: [],
+  prefs: { effort: 'medium', fast_mode: false, fast_supported: false },
 };
 
 const api = (p, opts) => fetch(`http://127.0.0.1:${state.apiPort}${p}`, opts);
 const dapi = (p, opts) => fetch(`http://127.0.0.1:${state.desktopPort}${p}`, opts);
+
+function toast(msg, ms = 4000) {
+  let el = document.querySelector('#toast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(el._timer);
+  el._timer = setTimeout(() => el.classList.remove('show'), ms);
+}
 
 /* ---------------- boot ---------------- */
 
@@ -80,6 +94,7 @@ async function init() {
   }).catch(() => {});
   setupSlash();
   setupModelMenus();
+  loadPrefs();
   setupDock();
   setupStudio();
   wireComposerClean();
@@ -990,6 +1005,69 @@ function setupModelMenus() {
   $('#modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
   $('#mf-save').addEventListener('click', saveModal);
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+  const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+  $('#chip-effort').addEventListener('click', () => {
+    floatingMenu($('#chip-effort'), (menu) => {
+      for (const level of EFFORTS) {
+        const el = document.createElement('div');
+        el.className = 'menu-item';
+        el.innerHTML = `<span class="check">${state.prefs.effort === level ? '✓' : ''}</span>${level}`;
+        el.addEventListener('click', () => {
+          menu.classList.remove('open');
+          setPrefs({ effort: level });
+        });
+        menu.appendChild(el);
+      }
+    });
+  });
+  $('#chip-fast').addEventListener('click', () => setPrefs({ fast_mode: !state.prefs.fast_mode }));
+}
+
+/* ---------------- effort / fast-mode prefs ---------------- */
+
+async function loadPrefs() {
+  try {
+    const res = await dapi('/desktop/api/model/prefs');
+    state.prefs = await res.json();
+  } catch {
+    state.prefs = { effort: 'medium', fast_mode: false, fast_supported: false };
+  }
+  renderPrefChips();
+}
+
+function renderPrefChips() {
+  const p = state.prefs || {};
+  const effort = p.effort || 'medium';
+  const effChip = $('#chip-effort');
+  effChip.textContent = `Effort: ${effort}`;
+  effChip.classList.toggle('on', effort !== 'medium');
+  const fastChip = $('#chip-fast');
+  fastChip.textContent = `Fast: ${p.fast_mode ? 'on' : 'off'}`;
+  fastChip.classList.toggle('on', !!p.fast_mode);
+  fastChip.classList.toggle('unsupported', p.fast_supported === false);
+  if (p.fast_supported === false) {
+    fastChip.title = 'Fast mode — current model does not advertise priority processing; the provider decides';
+  } else {
+    fastChip.title = 'Fast mode — priority processing where the provider supports it';
+  }
+}
+
+async function setPrefs(patch) {
+  try {
+    const res = await dapi('/desktop/api/model/prefs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(patch),
+    });
+    const d = await res.json();
+    if (!d.ok) throw new Error(d.error || 'save failed');
+    if (typeof d.effort === 'string') state.prefs.effort = d.effort;
+    if (typeof d.fast_mode === 'boolean') state.prefs.fast_mode = d.fast_mode;
+  } catch (e) {
+    toast(`prefs: ${e.message || e}`);
+  }
+  renderPrefChips();
 }
 
 let modalProvider = null;
