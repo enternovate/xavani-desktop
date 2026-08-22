@@ -51,9 +51,8 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path backend\engine | Out-Null
-          robocopy engine-src backend\engine /E /NFL /NDL /NJH /NJS ^
-            /XD .git node_modules tests website docs docker nix .github datagen-config-examples dist build .venv __pycache__ ui-tui .ruff_cache .pytest_cache /XF *.pyc
-          if ($LASTEXITCODE -le 7) { $global:LASTEXITCODE = 0 }
+          robocopy engine-src backend\engine /E /NFL /NDL /NJH /NJS /XD .git node_modules tests website docs docker nix .github datagen-config-examples dist build .venv __pycache__ ui-tui .ruff_cache .pytest_cache /XF *.pyc | Out-Null
+          if ($LASTEXITCODE -le 7) { exit 0 } else { exit $LASTEXITCODE }
 
       - name: Engine dependencies (from uv.lock)
         shell: pwsh
