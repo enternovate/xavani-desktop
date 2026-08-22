@@ -139,13 +139,23 @@ def _frontmatter(path: Path) -> tuple[str, str]:
         text = path.read_text(encoding="utf-8")
     except OSError:
         return path.parent.name, ""
-    match = re.match(r"^---\n(.*?)\n---", text, re.DOTALL)
-    if not match:
+    if not text.startswith("---"):
         return path.parent.name, ""
-    block = match.group(1)
-    name_m = re.search(r"^name:\s*['\"]?([^'\"]+)['\"]?\s*$", block, re.MULTILINE)
-    desc_m = re.search(r"^description:\s*['\"]?(.*?)['\"]?\s*$", block, re.MULTILINE)
-    return (name_m.group(1).strip() if name_m else path.parent.name), (desc_m.group(1).strip() if desc_m else "")
+    end = text.find("\n---", 3)
+    if end == -1:
+        return path.parent.name, ""
+    name = path.parent.name
+    desc = ""
+    for line in text[4:end].splitlines():
+        m = re.match(r"^(name|description):\s*(.*)$", line)
+        if not m:
+            continue
+        val = m.group(2).strip().strip("'\"").strip()
+        if m.group(1) == "name" and val:
+            name = val
+        elif m.group(1) == "description":
+            desc = val
+    return name, desc[:200]
 
 
 def _installed_skills() -> list[dict]:

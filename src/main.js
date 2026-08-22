@@ -83,20 +83,32 @@ function startBackend() {
 }
 
 let probing = false;
+let backendReadySent = false;
 function probeReady(apiPort, desktopPort) {
-  if (probing) return;
+  if (probing || backendReadySent) return;
   probing = true;
   const attempt = (n) => {
+    if (backendReadySent || !backend) { probing = false; return; }
+    let settled = false;
+    const retryOnce = () => {
+      if (settled || backendReadySent) return;
+      settled = true;
+      setTimeout(() => attempt(n + 1), 300);
+    };
     const req = http.get({ host: '127.0.0.1', port: apiPort, path: '/health', timeout: 1500 }, (res) => {
-      probing = false;
-      if (res.statusCode === 200) sendToWindow('backend-ready', { apiPort, desktopPort });
+      res.resume();
+      if (settled) return;
+      if (res.statusCode === 200) {
+        settled = true;
+        probing = false;
+        backendReadySent = true;
+        sendToWindow('backend-ready', { apiPort, desktopPort });
+      } else {
+        retryOnce();
+      }
     });
-    req.on('error', () => retry(n));
-    req.on('timeout', () => { req.destroy(); retry(n); });
-  };
-  const retry = (n) => {
-    if (n < 40) setTimeout(() => attempt(n + 1), 250);
-    else probing = false;
+    req.on('error', retryOnce);
+    req.on('timeout', () => { req.destroy(); retryOnce(); });
   };
   attempt(0);
 }
@@ -155,7 +167,7 @@ function createWindow() {
       }
       await wait(spec.shotDelay || 4000);
       const dump = await mainWindow.webContents.executeJavaScript(
-        'JSON.stringify({errs: window.__errs || [], nAssistant: document.querySelectorAll(".msg-assistant").length, snap: window.__snap || [], msgs: document.querySelector("#messages") ? document.querySelector("#messages").innerText.slice(0, 600) : "NO #messages"})'
+        'JSON.stringify({errs: window.__errs || [], events: window.__events || [], nAssistant: document.querySelectorAll(".msg-assistant").length, nToolCards: document.querySelectorAll(".tool-card").length, msgs: document.querySelector("#messages") ? document.querySelector("#messages").innerText.slice(0, 600) : "NO #messages"})'
       ).catch((e) => `dump-failed: ${e}`);
       console.log('[test] dom-dump:', String(dump).slice(0, 1200));
       if (spec.shot) {
