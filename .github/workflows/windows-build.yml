@@ -41,9 +41,10 @@ jobs:
         shell: pwsh
         run: |
           uv python install 3.13
-          $found = (uv python find 3.13).Trim()
-          $item = Get-Item $found
-          $src = if ($item.PSIsContainer) { $item.FullName } else { $item.DirectoryName }
+          $root = (uv python dir).Trim()
+          $src = Get-ChildItem $root -Directory -Filter 'cpython-3.13*' |
+            Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty FullName
+          if (-not $src) { Write-Host "::error::no cpython-3.13 under $root"; exit 1 }
           Write-Host "runtime source: $src"
           New-Item -ItemType Directory -Force -Path backend | Out-Null
           Copy-Item -Recurse -Force "$src\*" backend\runtime\
