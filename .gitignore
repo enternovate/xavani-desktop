@@ -1,0 +1,7 @@
+node_modules/
+dist/
+build/dmg-stage/
+build/icon.iconset/
+*.log
+.DS_Store
+reqs.txt

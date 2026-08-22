@@ -1,0 +1,76 @@
+name: windows-build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths-ignore:
+      - 'README.md'
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout engine (xavani-agent)
+        uses: actions/checkout@v4
+        with:
+          repository: enternovate/xavani-agent
+          path: engine-src
+          ref: main
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install app dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Install electron-builder
+        run: npm i --no-save --no-audit --no-fund electron-builder
+
+      - name: Bundle standalone Python runtime
+        shell: pwsh
+        run: |
+          uv python install 3.13
+          $src = (uv python find 3.13 | Split-Path | Split-Path)
+          New-Item -ItemType Directory -Force -Path backend | Out-Null
+          Copy-Item -Recurse -Force $src backend\runtime
+          $marker = Get-ChildItem -Recurse backend\runtime -Filter EXTERNALLY-MANAGED -ErrorAction SilentlyContinue
+          if ($marker) { Remove-Item $marker.FullName }
+
+      - name: Copy engine source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path backend\engine | Out-Null
+          robocopy engine-src backend\engine /E /NFL /NDL /NJH /NJS ^
+            /XD .git node_modules tests website docs docker nix .github datagen-config-examples dist build .venv __pycache__ ui-tui .ruff_cache .pytest_cache /XF *.pyc
+          if ($LASTEXITCODE -le 7) { $global:LASTEXITCODE = 0 }
+
+      - name: Engine dependencies (from uv.lock)
+        shell: pwsh
+        run: |
+          Push-Location engine-src
+          uv export --frozen --no-dev --no-hashes --no-emit-project --format requirements-txt -o ..\reqs.txt
+          Pop-Location
+          uv pip install --python backend\runtime\python.exe -r reqs.txt aiohttp
+
+      - name: Build Windows installers
+        shell: pwsh
+        run: npx electron-builder --win --x64
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xavani-windows
+          path: |
+            dist/*.exe
+            dist/*.zip
+          if-no-files-found: error
