@@ -134,6 +134,7 @@ async function init() {
   });
 
   $('#input').focus();
+  checkFirstRun();
 }
 
 async function refreshStatus() {
@@ -1135,6 +1136,212 @@ async function saveModal() {
     err.textContent = String(e.message || e);
     err.classList.remove('hidden');
   }
+}
+
+/* ---------------- first-run setup wizard ---------------- */
+
+const WIZ_SOURCES = [
+  { id: 'claude_code', label: 'Claude Code' },
+  { id: 'codex', label: 'Codex CLI' },
+  { id: 'hermes', label: 'Hermes Agent' },
+  { id: 'cursor', label: 'Cursor' },
+];
+
+function wizRenderProgress(idx, total) {
+  const box = $('#wiz-progress');
+  box.innerHTML = '';
+  for (let i = 0; i < total; i++) {
+    const d = document.createElement('div');
+    d.className = `wiz-dot${i <= idx ? ' done' : ''}`;
+    box.appendChild(d);
+  }
+}
+
+function wizField(label, inputHtml) {
+  return `<label class="wiz-field"><span>${label}</span>${inputHtml}</label>`;
+}
+
+async function openWizard() {
+  $('#wizard').classList.remove('hidden');
+  let providers = [];
+  try {
+    const r = await dapi('/desktop/api/providers');
+    providers = (await r.json()).providers || [];
+  } catch {}
+
+  const steps = [
+    {
+      title: 'Welcome to Xavani',
+      sub: 'Your full agent engine, now in a native app. This one-time setup connects a model, your tools, and your workspace. Everything stays on this machine.',
+      body: () => `<div class="wiz-title">Welcome to Xavani</div>
+        <div class="wiz-sub">${steps[0].sub}</div>`,
+      next: () => {},
+    },
+    {
+      title: 'Choose a provider',
+      sub: 'Pick the API provider and paste its key. The key is stored locally in ~/.xavani/.env.',
+      body: () => `<div class="wiz-title">Connect a model</div>
+        <div class="wiz-sub">${steps[1].sub}</div>
+        ${wizField('Provider', `<select id="wz-provider">${providers.map((p) => `<option value="${p.id}">${p.label}</option>`).join('')}</select>`)}
+        <div id="wz-model-wrap">
+          ${wizField('Model', '<input id="wz-model" class="mono" placeholder="provider/model or model id" autocomplete="off">')}
+          <datalist id="wz-model-list"></datalist>
+        </div>
+        ${wizField('API key', '<input id="wz-key" type="password" placeholder="paste key (stored in .env)">')}`,
+      onshow: () => {
+        const sel = $('#wz-provider');
+        const fill = () => {
+          const meta = providers.find((p) => p.id === sel.value);
+          const list = $('#wz-model-list');
+          if (list) list.innerHTML = (meta ? meta.models : []).map((m) => `<option value="${m}"></option>`).join('');
+        };
+        sel.addEventListener('change', fill);
+        fill();
+      },
+      next: async () => {
+        const payload = {
+          provider: $('#wz-provider').value,
+          model: $('#wz-model').value.trim() || undefined,
+          api_key: $('#wz-key').value.trim() || undefined,
+        };
+        const res = await dapi('/desktop/api/model/set', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const d = await res.json();
+        if (d.error) throw new Error(d.error);
+      },
+    },
+    {
+      title: 'Enable toolsets',
+      sub: 'Toolsets decide what the agent may do. You can change these any time in Settings.',
+      body: () => `<div class="wiz-title">Enable toolsets</div>
+        <div class="wiz-sub">${steps[2].sub}</div><div id="wz-tools" class="dim">Loading…</div>`,
+      onshow: () => {
+        state.wizToolsInitial = {};
+        dapi('/desktop/api/tools').then((r) => r.json()).then(({ toolsets }) => {
+          for (const t of (toolsets || [])) state.wizToolsInitial[t.name] = t.enabled;
+          $('#wz-tools').innerHTML = (toolsets || []).map((t) =>
+            `<label class="wiz-check"><input type="checkbox" data-ts="${t.name}" ${t.enabled ? 'checked' : ''}> ${t.name}<span class="dim"> — ${(t.description || '').slice(0, 70)}</span></label>`
+          ).join('') || '<span class="dim">No toolsets found.</span>';
+        }).catch(() => { $('#wz-tools').textContent = 'Could not load toolsets.'; });
+      },
+      next: async () => {
+        for (const cb of document.querySelectorAll('#wz-tools input[data-ts]')) {
+          if (cb.checked !== state.wizToolsInitial?.[cb.dataset.ts]) {
+            await dapi('/desktop/api/tools/toggle', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ name: cb.dataset.ts, enabled: cb.checked }),
+            }).catch(() => {});
+          }
+        }
+      },
+    },
+    {
+      title: 'Bring your history',
+      sub: 'Import past sessions and memory files from other AI tools. Optional.',
+      body: () => `<div class="wiz-title">Bring your history</div>
+        <div class="wiz-sub">${steps[3].sub}</div><div id="wz-import" class="dim">Scanning…</div>`,
+      onshow: () => {
+        dapi('/desktop/api/migrate/scan').then((r) => r.json()).then((report) => {
+          $('#wz-import').innerHTML = WIZ_SOURCES.filter((s) => report[s.id] && report[s.id].found).map((s) => {
+            const n = report[s.id].transcripts || 0;
+            return `<div class="wiz-row"><button class="btn ghost sm wz-imp" data-src="${s.id}">Import</button> ${s.label} — ${n} transcript${n === 1 ? '' : 's'} found<span class="wz-imp-out dim"></span></div>`;
+          }).join('') || '<span class="dim">No imports from other tools found.</span>';
+          document.querySelectorAll('.wz-imp').forEach((b) => {
+            b.addEventListener('click', async () => {
+              b.disabled = true;
+              const out = b.parentElement.querySelector('.wz-imp-out');
+              try {
+                const res = await dapi('/desktop/api/migrate/import', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ source: b.dataset.src }),
+                });
+                const d = await res.json();
+                out.textContent = d.error ? ` ${d.error}` : ` imported ${d.sessions} sessions, ${d.messages} messages`;
+                out.className = `wz-imp-out dim ${d.error ? 'wiz-bad' : 'wiz-ok'}`;
+              } catch (e) {
+                out.textContent = ` failed: ${e.message || e}`;
+              }
+              b.disabled = false;
+            });
+          });
+        }).catch(() => { $('#wz-import').textContent = 'Scan failed.'; });
+      },
+      next: () => {},
+    },
+    {
+      title: 'Set your workspace',
+      sub: 'Default folder for the file explorer and Studio. Use ~ for home.',
+      body: () => `<div class="wiz-title">Set your workspace</div>
+        <div class="wiz-sub">${steps[4].sub}</div>
+        ${wizField('Workspace root', '<input id="wz-root" class="mono" placeholder="~/projects">')}
+        <span id="wz-root-out" class="dim"></span>`,
+      onshow: () => {
+        dapi('/desktop/api/fs/root').then((r) => r.json()).then((d) => { $('#wz-root').value = d.root || ''; }).catch(() => {});
+      },
+      next: async () => {
+        const root = $('#wz-root').value.trim();
+        if (!root) return;
+        const res = await dapi('/desktop/api/fs/root', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ root }),
+        });
+        const d = await res.json();
+        if (d.error) throw new Error(d.error);
+      },
+    },
+    {
+      title: 'You are set',
+      sub: 'Everything is connected. Type a task in chat, or press / to see every command the engine has.',
+      body: () => `<div class="wiz-title">You are set</div>
+        <div class="wiz-sub">${steps[5].sub}</div>`,
+      next: () => {},
+    },
+  ];
+
+  let idx = 0;
+  const show = () => {
+    const s = steps[idx];
+    wizRenderProgress(idx, steps.length - 1);
+    $('#wiz-body').innerHTML = '';
+    $('#wiz-body').insertAdjacentHTML('beforeend', typeof s.body === 'string' ? s.body : s.body());
+    $('#wiz-back').classList.toggle('hidden', idx === 0);
+    $('#wiz-next').textContent = idx === steps.length - 1 ? 'Start using Xavani' : 'Continue';
+    if (s.onshow) s.onshow();
+  };
+  const advance = async () => {
+    try {
+      await steps[idx].next();
+      if (idx < steps.length - 1) { idx += 1; show(); return; }
+      await dapi('/desktop/api/setup/complete', { method: 'POST' }).catch(() => {});
+      $('#wizard').classList.add('hidden');
+      refreshStatus();
+      refreshSessions();
+      loadPrefs();
+    } catch (e) {
+      toast(`setup: ${e.message || e}`);
+    }
+  };
+  $('#wiz-next').onclick = advance;
+  $('#wiz-back').onclick = () => { if (idx > 0) { idx -= 1; show(); } };
+  $('#wiz-skip').onclick = async () => {
+    await dapi('/desktop/api/setup/skip', { method: 'POST' }).catch(() => {});
+    $('#wizard').classList.add('hidden');
+  };
+  show();
+}
+
+async function checkFirstRun() {
+  try {
+    const res = await dapi('/desktop/api/setup/status');
+    const d = await res.json();
+    if (d.first_run) await openWizard();
+  } catch {}
 }
 
 /* ---------------- right IDE dock (live preview + visual edit) ---------------- */

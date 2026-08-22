@@ -774,6 +774,41 @@ def build_desktop_app(api_port: int):
             "uptime_s": round(time.time() - STARTED_AT, 1),
         })
 
+    # ---------------- first-run setup ----------------
+
+    def _setup_flag_path() -> Path:
+        return _xavani_home() / "desktop-setup-complete"
+
+    @routes.get("/desktop/api/setup/status")
+    async def setup_status(_request: "web.Request") -> "web.Response":
+        has_sessions = False
+        try:
+            from xavani_state import SessionDB
+
+            has_sessions = len(SessionDB().list_sessions_rich(limit=1)) > 0
+        except Exception:
+            has_sessions = True  # fail open: never trap a working install in the wizard
+        done = _setup_flag_path().exists()
+        cfg = _load_config()
+        configured = bool((cfg.get("model") or {}).get("provider"))
+        return web.json_response({
+            "first_run": (not has_sessions) and not done,
+            "configured": configured,
+            "flag_path": str(_setup_flag_path()),
+        })
+
+    @routes.post("/desktop/api/setup/complete")
+    async def setup_complete(_request: "web.Request") -> "web.Response":
+        _setup_flag_path().parent.mkdir(parents=True, exist_ok=True)
+        _setup_flag_path().write_text("ok\n", encoding="utf-8")
+        return web.json_response({"ok": True})
+
+    @routes.post("/desktop/api/setup/skip")
+    async def setup_skip(_request: "web.Request") -> "web.Response":
+        _setup_flag_path().parent.mkdir(parents=True, exist_ok=True)
+        _setup_flag_path().write_text("skipped\n", encoding="utf-8")
+        return web.json_response({"ok": True})
+
     @routes.get("/desktop/api/sessions")
     async def sessions(request: "web.Request") -> "web.Response":
         limit = min(int(request.query.get("limit", "40")), 100)

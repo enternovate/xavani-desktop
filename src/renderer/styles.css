@@ -729,3 +729,35 @@ body.dock-resizing #dock-webview { pointer-events: none; }
   font-size: 11.5px; line-height: 1.5; color: var(--text-primary);
   white-space: pre;
 }
+
+/* ---------- first-run wizard ---------- */
+
+#wizard {
+  position: fixed; inset: 0; z-index: 500;
+  background: rgba(5,6,8,0.92); backdrop-filter: blur(6px);
+  display: flex; align-items: center; justify-content: center;
+}
+#wizard-card {
+  width: 520px; max-width: calc(100vw - 48px); max-height: calc(100vh - 80px);
+  overflow-y: auto; background: #101116; border: 1px solid var(--border-subtle);
+  border-radius: 14px; padding: 28px 30px 20px;
+}
+.wiz-progress { display: flex; gap: 6px; margin-bottom: 22px; }
+.wiz-dot { height: 3px; flex: 1; border-radius: 2px; background: rgba(255,255,255,0.10); }
+.wiz-dot.done { background: #7170ff; }
+.wiz-title { font-size: 17px; font-weight: 600; color: var(--text-primary); margin-bottom: 6px; }
+.wiz-sub { font-size: 12.5px; color: var(--text-tertiary); margin-bottom: 18px; line-height: 1.5; }
+.wiz-actions { display: flex; align-items: center; margin-top: 22px; }
+.wiz-skip { background: none; border: none; color: var(--text-tertiary); font-size: 12px; cursor: pointer; padding: 0; }
+.wiz-skip:hover { color: var(--text-primary); }
+.wiz-field { display: block; margin-bottom: 14px; }
+.wiz-field span { display: block; font-size: 11.5px; color: var(--text-tertiary); margin-bottom: 5px; }
+.wiz-field input, .wiz-field select {
+  width: 100%; box-sizing: border-box; background: #0b0c0f; color: var(--text-primary);
+  border: 1px solid var(--border-subtle); border-radius: 7px; padding: 8px 10px; font-size: 13px;
+}
+.wiz-check { display: flex; align-items: center; gap: 9px; padding: 7px 4px; cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+.wiz-check input { accent-color: #7170ff; }
+.wiz-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 13px; color: var(--text-secondary); }
+.wiz-ok { color: #10b981; }
+.wiz-bad { color: #eb5757; }
