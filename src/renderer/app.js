@@ -16,6 +16,9 @@ const state = {
   activeView: 'chat',
   activeSessionItem: null,
   cliCommands: [],
+  showCli: false,
+  lastSessions: [],
+  providers: [],
 };
 
 const api = (p, opts) => fetch(`http://127.0.0.1:${state.apiPort}${p}`, opts);
@@ -68,6 +71,9 @@ async function init() {
     buildChips();
   }).catch(() => {});
   setupSlash();
+  setupModelMenus();
+  setupDock();
+  wireComposerClean();
 
   $('#send').addEventListener('click', onSend);
   $('#stop').addEventListener('click', onStop);
@@ -97,6 +103,12 @@ async function init() {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newChat(); }
   });
 
+  $('#toggle-cli').addEventListener('click', () => {
+    state.showCli = !state.showCli;
+    $('#toggle-cli').classList.toggle('on', state.showCli);
+    renderSessions(state.lastSessions || []);
+  });
+
   $('#input').focus();
 }
 
@@ -117,28 +129,20 @@ async function refreshSessions() {
   try {
     const res = await dapi('/desktop/api/sessions?limit=40');
     const data = await res.json();
-    renderSessions(data.sessions || []);
+    state.lastSessions = data.sessions || [];
+    renderSessions(state.lastSessions);
   } catch { /* sidebar stays empty */ }
-}
-
-/* ---------------- sidebar sessions ---------------- */
-
-function fmtWhen(ts) {
-  if (!ts) return '';
-  const d = new Date(ts * 1000);
-  const now = new Date();
-  if (d.toDateString() === now.toDateString()) return d.toTimeString().slice(0, 5);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function renderSessions(sessions) {
   const box = $('#sessions');
   box.innerHTML = '';
-  if (!sessions.length) {
-    box.innerHTML = '<div class="session-item" style="cursor:default">No sessions yet</div>';
+  const visible = (sessions || []).filter((s) => state.showCli || !(s.source === 'cli' || String(s.source || '').startsWith('cli')));
+  if (!visible.length) {
+    box.innerHTML = `<div class="session-item" style="cursor:default">${state.showCli ? 'No sessions yet' : 'No desktop sessions yet'}</div>`;
     return;
   }
-  for (const s of sessions) {
+  for (const s of visible) {
     const el = document.createElement('button');
     el.className = 'session-item';
     const label = s.title || s.preview || 'Untitled session';
@@ -147,6 +151,14 @@ function renderSessions(sessions) {
     el.addEventListener('click', () => openSession(s.id, el));
     box.appendChild(el);
   }
+}
+
+function fmtWhen(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) return d.toTimeString().slice(0, 5);
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 async function openSession(id, el) {
@@ -319,7 +331,7 @@ async function consumeEvents(runId, block) {
     if (!toolsBox) {
       toolsBox = document.createElement('div');
       toolsBox.className = 'tools';
-      block.insertBefore(toolsBox, block._bubble);
+      activityContainer(block).appendChild(toolsBox);
     }
     return toolsBox;
   };
@@ -351,7 +363,7 @@ async function consumeEvents(runId, block) {
       reasoningBox = document.createElement('details');
       reasoningBox.className = 'reasoning';
       reasoningBox.innerHTML = '<summary>Thinking</summary><div class="reasoning-body"></div>';
-      block.insertBefore(reasoningBox, block._bubble);
+      activityContainer(block).appendChild(reasoningBox);
     }
     const body = reasoningBox.querySelector('.reasoning-body');
     body.textContent += text;
@@ -413,6 +425,18 @@ async function consumeEvents(runId, block) {
   finishBlock(block, null);
   block._bubble.innerHTML = md(acc || (finalBlock && finalBlock.output) || '*(no output)*');
   state.messages.push({ role: 'assistant', content: acc || (finalBlock && finalBlock.output) || '' });
+  if (block._activity) {
+    const nTools = block._activity.querySelectorAll('.tool-card').length;
+    const hasReasoning = !!block._activity.querySelector('.reasoning');
+    if (!nTools && !hasReasoning) {
+      block._activity.remove();
+    } else {
+      const bits = [];
+      if (nTools) bits.push(`${nTools} tool call${nTools > 1 ? 's' : ''}`);
+      if (hasReasoning) bits.push('thinking');
+      block._activity.querySelector('summary').textContent = bits.join(' · ');
+    }
+  }
   scrollBottom(true);
 }
 
@@ -460,6 +484,7 @@ function switchView(name) {
   if (name === 'status') loadStatus();
   if (name === 'constellation') loadConstellation();
   if (name === 'console') ensureConsole();
+  if (name === 'import') loadMigration();
 }
 
 function cardEl(name, desc, meta, action) {
@@ -866,4 +891,372 @@ async function enableConstellation() {
   } catch (err) {
     if (out) out.textContent = `failed: ${err}`;
   }
+}
+
+/* ---------------- provider & model menus ---------------- */
+
+function floatingMenu(anchor, buildItems) {
+  let menu = document.querySelector('.menu.model-menu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.className = 'menu model-menu';
+    document.body.appendChild(menu);
+    document.addEventListener('click', (e) => {
+      if (!menu.contains(e.target) && !menu._anchor?.contains(e.target)) menu.classList.remove('open');
+    });
+  }
+  menu._anchor = anchor;
+  if (menu.classList.contains('open') && menu._for === anchor.id) {
+    menu.classList.remove('open');
+    return;
+  }
+  menu.innerHTML = '';
+  buildItems(menu);
+  const r = anchor.getBoundingClientRect();
+  menu.style.top = `${r.bottom + 6}px`;
+  menu.style.left = `${Math.min(r.left, window.innerWidth - menu.offsetWidth - 12)}px`;
+  menu.classList.add('open');
+}
+
+function setupModelMenus() {
+  $('#chip-provider').addEventListener('click', () => {
+    floatingMenu($('#chip-provider'), (menu) => {
+      dapi('/desktop/api/providers').then((r) => r.json()).then(({ providers, current }) => {
+        for (const p of providers) {
+          const el = document.createElement('div');
+          el.className = 'menu-item';
+          el.innerHTML = `<span class="check">${current.provider === p.id ? '✓' : ''}</span>${p.label}`;
+          el.addEventListener('click', () => {
+            menu.classList.remove('open');
+            openModelModal(p);
+          });
+          menu.appendChild(el);
+        }
+        menu.appendChild(Object.assign(document.createElement('div'), { className: 'menu-sep' }));
+        const add = document.createElement('div');
+        add.className = 'menu-item';
+        add.innerHTML = '<span class="check">+</span>Add provider / set API key…';
+        add.addEventListener('click', () => {
+          menu.classList.remove('open');
+          openModelModal(null);
+        });
+        menu.appendChild(add);
+      }).catch(() => {
+        menu.innerHTML = '<div class="menu-item">Backend unreachable</div>';
+      });
+    });
+  });
+
+  $('#chip-model').addEventListener('click', () => {
+    floatingMenu($('#chip-model'), (menu) => {
+      dapi('/desktop/api/providers').then((r) => r.json()).then(({ providers, current }) => {
+        const meta = providers.find((p) => p.id === current.provider);
+        for (const m of (meta ? meta.models : []).slice(0, 10)) {
+          const el = document.createElement('div');
+          el.className = 'menu-item';
+          el.innerHTML = `<span class="check">${current.model === m ? '✓' : ''}</span><span class="s-cmd mono" style="font-size:12px">${m}</span>`;
+          el.addEventListener('click', () => { menu.classList.remove('open'); saveModel(current.provider, m); });
+          menu.appendChild(el);
+        }
+        menu.appendChild(Object.assign(document.createElement('div'), { className: 'menu-sep' }));
+        const custom = document.createElement('div');
+        custom.className = 'menu-item';
+        custom.innerHTML = '<span class="check">✎</span>Set a different model…';
+        custom.addEventListener('click', () => {
+          menu.classList.remove('open');
+          openModelModal(meta || null, true);
+        });
+        menu.appendChild(custom);
+      });
+    });
+  });
+
+  $('#mf-cancel').addEventListener('click', closeModal);
+  $('#modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
+  $('#mf-save').addEventListener('click', saveModal);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+}
+
+let modalProvider = null;
+
+function openModelModal(providerMeta, keepCurrentModel) {
+  modalProvider = providerMeta;
+  dapi('/desktop/api/providers').then((r) => r.json()).then(({ providers, current }) => {
+    state.providers = providers;
+    const sel = $('#mf-provider');
+    sel.innerHTML = '';
+    for (const p of providers) {
+      const o = document.createElement('option');
+      o.value = p.id;
+      o.textContent = p.label;
+      sel.appendChild(o);
+    }
+    sel.value = providerMeta ? providerMeta.id : (current.provider || 'openrouter');
+    syncModalFields();
+    $('#mf-model').value = keepCurrentModel && current.model ? current.model : '';
+    $('#mf-key').value = '';
+    $('#mf-err').classList.add('hidden');
+    $('#modal-backdrop').classList.remove('hidden');
+    $('#mf-model').focus();
+  });
+}
+
+function syncModalFields() {
+  const id = $('#mf-provider').value;
+  const meta = (state.providers || []).find((p) => p.id === id);
+  const list = $('#mf-model-list');
+  list.innerHTML = '';
+  for (const m of (meta ? meta.models : [])) {
+    const o = document.createElement('option');
+    o.value = m;
+    list.appendChild(o);
+  }
+  $('#mf-key-note').textContent = meta && meta.env ? `stored as ${meta.env}` : '(not required)';
+  $('#mf-url-row').classList.toggle('hidden', id !== 'custom');
+}
+
+function closeModal() {
+  $('#modal-backdrop').classList.add('hidden');
+}
+
+async function saveModal() {
+  const err = $('#mf-err');
+  err.classList.add('hidden');
+  const payload = {
+    provider: $('#mf-provider').value,
+    model: $('#mf-model').value.trim(),
+    api_key: $('#mf-key').value.trim(),
+    base_url: $('#mf-url').value.trim(),
+  };
+  try {
+    const res = await dapi('/desktop/api/model/set', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+    const d = await res.json();
+    if (!d.ok && !d.provider) throw new Error(d.error || 'save failed');
+    closeModal();
+    refreshStatus();
+  } catch (e) {
+    err.textContent = String(e.message || e);
+    err.classList.remove('hidden');
+  }
+}
+
+/* ---------------- right IDE dock (live preview + visual edit) ---------------- */
+
+function setupDock() {
+  $('#dock-toggle').addEventListener('click', () => {
+    $('#app').classList.toggle('dock-open');
+    setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
+  });
+  $('#dock-close').addEventListener('click', () => $('#app').classList.remove('dock-open'));
+  const go = () => {
+    const url = $('#dock-url').value.trim();
+    if (!/^https?:\/\//.test(url)) return;
+    $('#dock-hint').style.display = 'none';
+    $('#dock-webview').setAttribute('src', url);
+  };
+  $('#dock-go').addEventListener('click', go);
+  $('#dock-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
+  $('#dock-edit').addEventListener('click', toggleVisualEdit);
+}
+
+let visualEditOn = false;
+
+function toggleVisualEdit() {
+  visualEditOn = !visualEditOn;
+  $('#dock').classList.toggle('edit-active', visualEditOn);
+  const wv = $('#dock-webview');
+  if (!wv || !wv.executeJavaScript) return;
+  wv.executeJavaScript(VISUAL_EDIT_SCRIPT.replace('__MODE__', visualEditOn ? '1' : '0'), true)
+    .then((edits) => {
+      if (Array.isArray(edits) && edits.length) sendEditsToAgent(edits);
+    })
+    .catch(() => {});
+}
+
+const VISUAL_EDIT_SCRIPT = `
+(function(){
+  window.__xdEdits = window.__xdEdits || [];
+  var prev = document.getElementById('__xd_overlay');
+  if (prev) prev.remove();
+  if (!__MODE__) { return JSON.stringify(window.__xdEdits); }
+  var st = document.createElement('style');
+  st.id = '__xd_overlay';
+  st.textContent = '[__xd-hover]{outline:2px dashed #7170ff !important; cursor:nwse-resize !important;} [__xd-sel]{outline:2px solid #7170ff !important;} #__xd_panel{position:fixed;right:12px;bottom:12px;z-index:2147483647;background:#191a1b;color:#d0d6e0;font:11px/1.5 ui-monospace,monospace;border:1px solid rgba(255,255,255,.15);border-radius:8px;padding:10px;box-shadow:0 4px 16px rgba(0,0,0,.5);}#__xd_panel button{margin:2px;padding:3px 7px;background:rgba(255,255,255,.06);color:#d0d6e0;border:1px solid rgba(255,255,255,.15);border-radius:4px;cursor:pointer;font-size:10px;}#__xd_panel .xdv{color:#7170ff;margin:4px 0;}';
+  document.head.appendChild(st);
+
+  var panel = document.createElement('div');
+  panel.id = '__xd_panel';
+  panel.innerHTML = '<b style="color:#f7f8f8">Visual edit</b><br>Pick an element, then adjust.<div class="xdv" id="__xd_target">&lt;none selected&gt;</div>'
+    + '<button data-a="pl-">padding −</button><button data-a="pl+">padding +</button>'
+    + '<button data-a="mt-">margin −</button><button data-a="mt+">margin +</button>'
+    + '<button data-a="gap-">gap −</button><button data-a="gap+">gap +</button>'
+    + '<button data-a="w-">width −</button><button data-a="w+">width +</button>'
+    + '<div style="margin-top:6px"><button data-a="undo">undo last</button><button data-a="send">send to agent</button></div>';
+  document.body.appendChild(panel);
+
+  var sel = null, hover = null;
+
+  function tagOf(el){ return el.tagName.toLowerCase() + (el.id ? '#'+el.id : '') + (el.className && typeof el.className==='string' ? '.'+el.className.trim().split(/\\s+/).slice(0,2).join('.') : ''); }
+
+  function px(el, prop){ return parseInt(getComputedStyle(el)[prop], 10) || 0; }
+  function setPx(el, prop, delta){
+    var next = Math.max(0, px(el, prop) + delta);
+    el.style.setProperty(prop, next + 'px');
+    record(el, prop, next + 'px');
+  }
+  function record(el, prop, val){
+    var t = tagOf(el);
+    var entry = window.__xdEdits.find(function(e){ return e.target === t && e.prop === prop; });
+    if (entry) entry.value = val;
+    else window.__xdEdits.push({ target: t, prop: prop, value: val });
+    panel.querySelector('#__xd_target').textContent = t + ' → ' + prop + ': ' + val;
+  }
+
+  document.addEventListener('mouseover', function(e){
+    if (hover) hover.removeAttribute('__xd-hover');
+    hover = e.target;
+    if (hover !== document.body) hover.setAttribute('__xd-hover','');
+  }, true);
+  document.addEventListener('mouseout', function(){ if(hover) hover.removeAttribute('__xd-hover'); }, true);
+  document.addEventListener('click', function(e){
+    if (panel.contains(e.target)) return;
+    e.preventDefault(); e.stopPropagation();
+    if (sel) sel.removeAttribute('__xd-sel');
+    sel = e.target;
+    sel.setAttribute('__xd-sel','');
+    panel.querySelector('#__xd_target').textContent = tagOf(sel);
+  }, true);
+
+  panel.addEventListener('click', function(e){
+    var a = e.target.getAttribute && e.target.getAttribute('data-a');
+    if (!a || !sel) return;
+    e.preventDefault(); e.stopPropagation();
+    var map = { 'pl+': ['padding-left', 4], 'pl-': ['padding-left', -4],
+                'mt+': ['margin-top', 4], 'mt-': ['margin-top', -4],
+                'w+': ['width', 20], 'w-': ['width', -20] };
+    if (a in map) setPx(sel, map[a][0], map[a][1]);
+    else if (a === 'gap+' || a === 'gap-'){
+      if (sel.style.gap) { var g = parseInt(sel.style.gap)||0; g += (a==='gap+'?4:-4); sel.style.gap = Math.max(0,g)+'px'; record(sel,'gap',Math.max(0,g)+'px'); }
+      else { sel.style.gap = (a==='gap+'?'8px':'0px'); record(sel,'gap',sel.style.gap); }
+    } else if (a === 'undo'){ window.__xdEdits.pop(); }
+      else if (a === 'send'){ window.__XD_SEND = true; }
+  });
+
+  setInterval(function(){
+    if (window.__XD_SEND){
+      window.__XD_SEND = false;
+      window.__xdDone = JSON.stringify(window.__xdEdits);
+    }
+  }, 400);
+  return JSON.stringify([]);
+})();
+`;
+
+function pollDockEdits() {
+  if (!visualEditOn) return;
+  const wv = $('#dock-webview');
+  if (!wv || !wv.executeJavaScript) return;
+  wv.executeJavaScript('window.__xdDone || ""', true)
+    .then((done) => {
+      if (done) {
+        wv.executeJavaScript('(function(){ window.__xdDone=null; return "ok"; })()', true);
+        sendEditsToAgent(JSON.parse(done));
+        toggleVisualEdit();
+        toggleVisualEdit();
+      }
+    })
+    .catch(() => {});
+}
+setInterval(pollDockEdits, 1200);
+
+function sendEditsToAgent(edits) {
+  if (!edits.length) return;
+  const lines = edits.map((e) => `- \`${e.target}\` → set \`${e.prop}: ${e.value}\``).join('\n');
+  const msg = `I adjusted the running preview visually. Apply these exact changes to the project's source code:\n${lines}\nUpdate the relevant source files/styles so the change is permanent, then confirm.`;
+  switchView('chat');
+  const input = $('#input');
+  input.value = msg;
+  autosize();
+  input.focus();
+}
+
+/* ---------------- migration view ---------------- */
+
+const MIG_LABELS = {
+  claude_code: 'Claude Code',
+  codex: 'OpenAI Codex CLI',
+  hermes: 'Hermes Agent',
+  cursor: 'Cursor',
+};
+
+function loadMigration() {
+  const box = $('#import-panel');
+  box.innerHTML = '<div class="panel-title">Import</div><div class="panel-desc">Bring memories and conversation history from your other AI tools into Xavani. Memory files land in <span class="mono">~/.xavani/memory-imports/</span>; transcripts appear in the sidebar.</div>';
+  box.innerHTML += '<div class="empty">Scanning…</div>';
+  dapi('/desktop/api/migrate/scan').then((r) => r.json()).then((report) => {
+    const wrap = $('#import-panel');
+    wrap.innerHTML = '<div class="panel-title">Import</div><div class="panel-desc">Bring memories and conversation history from your other AI tools into Xavani. Memory files land in <span class="mono">~/.xavani/memory-imports/</span>; transcripts appear in the sidebar.</div>';
+    for (const [src, info] of Object.entries(report)) {
+      const card = document.createElement('div');
+      card.className = 'mig-card';
+      const label = MIG_LABELS[src] || src;
+      const files = (info.memory_files || []).map((f) => f.split('/').pop());
+      card.innerHTML = `
+        <div class="mig-head">
+          <span class="mig-name">${label}</span>
+          <span class="mig-stats">${info.found ? `${info.transcripts} transcript(s) · ${files.length} memory file(s)` : 'not found on this machine'}</span>
+        </div>
+        ${files.length ? `<div class="mig-files">${escapeHtml(files.join(' · '))}</div>` : ''}
+        <div class="mig-actions">
+          <button class="btn ghost sm mig-go" ${info.found ? '' : 'disabled'}>Import</button>
+          <span class="mig-result"></span>
+        </div>`;
+      card.querySelector('.mig-go').addEventListener('click', async (ev) => {
+        const btn = ev.currentTarget;
+        const resEl = card.querySelector('.mig-result');
+        btn.disabled = true;
+        resEl.textContent = 'Importing…';
+        resEl.className = 'mig-result';
+        try {
+          const res = await dapi('/desktop/api/migrate/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ source: src }),
+          });
+          const d = await res.json();
+          resEl.textContent = d.error ? `failed: ${d.error}` : `✓ ${d.sessions} session(s), ${d.messages} messages, ${d.memory_files} memory file(s)`;
+          refreshSessions();
+        } catch (e) {
+          resEl.textContent = `failed: ${e}`;
+          resEl.style.color = 'var(--red)';
+        }
+        btn.disabled = false;
+      });
+      wrap.appendChild(card);
+    }
+  }).catch(() => {
+    $('#import-panel').innerHTML = '<div class="empty">Scan failed — backend unreachable.</div>';
+  });
+}
+
+/* ---------------- clean results mode ---------------- */
+
+function wireComposerClean() {
+  state.cleanMode = true;
+}
+
+function activityContainer(block) {
+  if (!block._activity) {
+    const det = document.createElement('details');
+    det.className = 'activity';
+    det.innerHTML = '<summary>Working…</summary><div class="act-body"></div>';
+    block.insertBefore(det, block._bubble);
+    block._activity = det;
+    block._actBody = det.querySelector('.act-body');
+  }
+  return block._actBody;
 }

@@ -149,6 +149,7 @@ function createWindow() {
       nodeIntegration: false,
       sandbox: true,
       spellcheck: false,
+      webviewTag: true,
     },
   });
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
@@ -161,7 +162,7 @@ function createWindow() {
     try { spec = JSON.parse(process.env.XAVANI_DESKTOP_TEST); } catch {}
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     (async () => {
-      await wait(2500);
+      await wait(spec.scriptDelay || 2500);
       if (spec.script) {
         await mainWindow.webContents.executeJavaScript(spec.script).catch((e) => console.error('[test-script]', e));
       }
