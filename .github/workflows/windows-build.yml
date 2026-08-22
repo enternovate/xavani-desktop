@@ -47,7 +47,8 @@ jobs:
           if (-not $src) { Write-Host "::error::no cpython-3.13 under $root"; exit 1 }
           Write-Host "runtime source: $src"
           New-Item -ItemType Directory -Force -Path backend | Out-Null
-          Copy-Item -Recurse -Force "$src\*" backend\runtime\
+          New-Item -ItemType Directory -Force -Path backend\runtime | Out-Null
+          Copy-Item -Path "$src\*" -Destination backend\runtime -Recurse -Force
           if (-not (Test-Path backend\runtime\python.exe)) {
             Write-Host "::error::python.exe missing after copy"
             Get-ChildItem backend\runtime | Select-Object -First 20 Name
