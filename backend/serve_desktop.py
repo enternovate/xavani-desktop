@@ -43,6 +43,13 @@ def _engine_root() -> Path:
 ENGINE_ROOT = _engine_root()
 sys.path.insert(0, str(ENGINE_ROOT))
 
+# All children (CLI one-shots, PTY shell, MCP servers spawned by the engine)
+# must see this interpreter's console scripts — e.g. the bundled
+# nyarhi/gavaza/mhangani/constellation-mcp CLIs. No resolve(): the venv
+# symlink's parent is the dir that holds them.
+_BINDIR = str(Path(sys.executable).parent)
+os.environ["PATH"] = f"{_BINDIR}{os.pathsep}{os.environ.get('PATH', '')}"
+
 
 def _free_port(start: int, used: set[int]) -> int:
     port = start
@@ -483,6 +490,18 @@ async def main() -> None:
         print(json.dumps({"ready": False, "error": "api server failed to start"}), flush=True)
         raise SystemExit(1)
 
+    # The api_server agent path never calls discover_mcp_tools() itself (the
+    # gateway / CLI / cron paths each do). Without this, mcp_servers entries
+    # in config.yaml — e.g. the constellation MCP server — never reach
+    # desktop sessions. Idempotent inside the engine.
+    mcp_tool_count = 0
+    try:
+        from tools.mcp_tool import discover_mcp_tools
+
+        mcp_tool_count = len(await asyncio.to_thread(discover_mcp_tools) or [])
+    except Exception as exc:
+        print(f"[desktop] MCP init failed (non-fatal): {exc}", file=sys.stderr, flush=True)
+
     from aiohttp import web
 
     runner = web.AppRunner(build_desktop_app(api_port))
@@ -504,6 +523,7 @@ async def main() -> None:
         "desktop_port": desktop_port,
         "pid": os.getpid(),
         "engine_version": _engine_version(),
+        "mcp_tools": mcp_tool_count,
     }), flush=True)
 
     await stop.wait()
