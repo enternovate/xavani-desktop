@@ -1,0 +1,42 @@
+appId: com.enternovate.xavani
+productName: Xavani
+copyright: Enternovate
+
+directories:
+  output: dist
+  buildResources: build
+
+files:
+  - package.json
+  - src/**/*
+  - node_modules/marked/**/*
+  - node_modules/dompurify/**/*
+
+extraResources:
+  - from: backend/
+    to: backend/
+
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch: [x64]
+    - target: zip
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: Xavani-${version}-windows-x64-setup.exe
+  shortcutName: Xavani
+
+mac:
+  icon: build/icon.icns
+  identity: null
+  target:
+    - target: dmg
+      arch: [arm64]
+
+dmg:
+  artifactName: Xavani-${version}-macos-arm64.dmg

@@ -1,0 +1,21 @@
+{
+  "name": "xavani-desktop",
+  "productName": "Xavani",
+  "version": "0.1.0",
+  "description": "Xavani Agent desktop app — the full CLI engine in a native GUI",
+  "main": "src/main.js",
+  "author": "Enternovate",
+  "license": "MIT",
+  "repository": "github:enternovate/xavani-desktop",
+  "scripts": {
+    "start": "electron .",
+    "dist:mac": "bash scripts/build-macos.sh"
+  },
+  "devDependencies": {
+    "electron": "^38.2.0"
+  },
+  "dependencies": {
+    "marked": "^15.0.0",
+    "dompurify": "^3.2.0"
+  }
+}
