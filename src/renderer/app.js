@@ -313,6 +313,7 @@ async function onSend() {
     setRunning(false);
     state.currentRunId = null;
     state.currentController = null;
+    dockRunEnded();
     refreshStatus();
     refreshSessions();
   }
@@ -391,6 +392,7 @@ async function consumeEvents(runId, block) {
           break;
         case 'tool.started':
           evt._card = addToolCard(evt);
+          agentTouchedFile(evt);
           break;
         case 'tool.completed': {
           const card = evt._card || toolsBox && toolsBox.lastElementChild;
@@ -402,6 +404,7 @@ async function consumeEvents(runId, block) {
             icon.style.color = evt.error ? 'var(--red)' : 'var(--green)';
             card.querySelector('.t-status').textContent = evt.duration != null ? `${evt.duration}s` : (evt.error ? 'error' : 'done');
           }
+          agentTouchedFile(evt);
           break;
         }
         case 'reasoning.available':
@@ -423,6 +426,7 @@ async function consumeEvents(runId, block) {
   if (finalBlock && finalBlock.usage) {
     $('#usage-chip').textContent = `${finalBlock.usage.total_tokens.toLocaleString()} tokens`;
   }
+  dockRunEnded();
   finishBlock(block, null);
   block._bubble.innerHTML = md(acc || (finalBlock && finalBlock.output) || '*(no output)*');
   state.messages.push({ role: 'assistant', content: acc || (finalBlock && finalBlock.output) || '' });
@@ -794,6 +798,7 @@ function setupSlash() {
   const nativeCommands = [
     { name: 'new', desc: 'Start a fresh chat session', native: true, action: newChat },
     { name: 'studio', desc: 'Toggle Studio: explorer + code editor + live preview', native: true, action: () => toggleStudio() },
+    { name: 'flip', desc: "Flip the right dock between the live site and files the agent is writing", native: true, action: () => dockFlip() },
   ];
   state.cliCommands = [...nativeCommands, ...state.cliCommands];
   buildChips();
@@ -1058,11 +1063,14 @@ function setupDock() {
     const url = $('#dock-url').value.trim();
     if (!/^https?:\/\//.test(url)) return;
     $('#dock-hint').style.display = 'none';
+    state.dockNavigated = true;
     $('#dock-webview').setAttribute('src', url);
   };
   $('#dock-go').addEventListener('click', go);
   $('#dock-url').addEventListener('keydown', (e) => { if (e.key === 'Enter') go(); });
   $('#dock-edit').addEventListener('click', toggleVisualEdit);
+  setupDockTabs();
+  setupDockResize();
 }
 
 let visualEditOn = false;
@@ -1607,6 +1615,168 @@ function fsCreate(op) {
   })
     .then(() => renderTree(base))
     .catch((err) => treeError(String(err)));
+}
+
+/* ---------------- dock tabs: preview ⇄ agent files ---------------- */
+
+const dockState = {
+  fileTabs: [],
+  active: 'preview',
+  follow: true,
+  loadSeq: 0,
+};
+
+const DOCK_MAX_TABS = 15;
+const dockRefreshTimers = {};
+const FILE_PATH_RE = /[A-Za-z0-9_@./~-]+\.(?:html?|css|scss|less|js|jsx|mjs|cjs|ts|tsx|json|md|txt|py|ya?ml|toml|csv|svg|xml|sh|env|php|rb|go|rs|java|kt|swift|c|cpp|h|hpp|sql|vue|svelte|ini|cfg)\b/gi;
+
+function dockTabName(p) { return p.split('/').pop(); }
+
+function renderDockTabs() {
+  const wrap = $('#dock-tabs');
+  wrap.innerHTML = '';
+  const mk = (id, html, extraCls, title) => {
+    const el = document.createElement('div');
+    el.className = `dock-tab${extraCls || ''}${dockState.active === id ? ' active' : ''}`;
+    el.title = title || id;
+    el.innerHTML = html;
+    el.addEventListener('click', () => setDockTab(id));
+    wrap.appendChild(el);
+    return el;
+  };
+  mk('preview', '<span class="dt-name">◉ Live site</span>', '', 'Hosted site preview — /flip toggles between this and agent files');
+  for (const t of dockState.fileTabs) {
+    const el = mk(t.path, `<span class="dt-name">${escapeHtml(t.name)}</span><span class="tab-close">×</span>`, t.fresh ? ' fresh' : '');
+    el.querySelector('.tab-close').addEventListener('click', (e) => {
+      e.stopPropagation();
+      dockState.fileTabs = dockState.fileTabs.filter((x) => x !== t);
+      if (dockState.active === t.path) setDockTab('preview');
+      else renderDockTabs();
+    });
+    if (t.fresh) setTimeout(() => { t.fresh = false; el.classList.remove('fresh'); }, 1400);
+  }
+}
+
+function setDockTab(id) {
+  dockState.active = id;
+  const isPreview = id === 'preview';
+  $('#dock-webview').style.display = isPreview ? '' : 'none';
+  $('#dock-fileview').classList.toggle('hidden', isPreview);
+  $('#dock-hint').style.display = (isPreview && !state.dockNavigated) ? '' : 'none';
+  renderDockTabs();
+  if (!isPreview) loadFileIntoDock(id);
+}
+
+async function loadFileIntoDock(path) {
+  const seq = ++dockState.loadSeq;
+  $('#dock-filepath').textContent = path;
+  try {
+    const res = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(path)}`);
+    const d = await res.json();
+    if (seq !== dockState.loadSeq) return;
+    if (d.error) {
+      $('#dock-filecode').textContent = d.error;
+      $('#dock-filegutter').textContent = '';
+      return;
+    }
+    $('#dock-filecode').textContent = d.content.replace(/\t/g, '  ');
+    let g = '';
+    const n = d.content.split('\n').length;
+    for (let i = 1; i <= n; i++) g += i + '\n';
+    $('#dock-filegutter').textContent = g;
+    $('#dock-filescroll').scrollTop = 0;
+  } catch (err) {
+    if (seq === dockState.loadSeq) { $('#dock-filecode').textContent = String(err); $('#dock-filegutter').textContent = ''; }
+  }
+}
+
+function dockOpenFile(path, activate) {
+  if (!path || typeof path !== 'string' || path.length > 500 || path.includes('://')) return;
+  let t = dockState.fileTabs.find((x) => x.path === path);
+  if (!t) {
+    t = { path, name: dockTabName(path) };
+    dockState.fileTabs.unshift(t);
+    if (dockState.fileTabs.length > DOCK_MAX_TABS) {
+      const evicted = dockState.fileTabs.splice(DOCK_MAX_TABS);
+      if (evicted.some((x) => x.path === dockState.active)) dockState.active = 'preview';
+    }
+  }
+  t.fresh = true;
+  if (activate !== false) setDockTab(path);
+  else renderDockTabs();
+}
+
+function extractFilePath(evt) {
+  const hay = `${evt.preview || ''}`;
+  const m = hay.match(FILE_PATH_RE);
+  return m ? m[m.length - 1] : null;
+}
+
+function agentTouchedFile(evt) {
+  if (!evt) return;
+  const tool = (evt.tool || '').toLowerCase();
+  if (!/writ|patch|edit|creat|save|apply/.test(tool)) return;
+  const path = extractFilePath(evt);
+  if (!path) return;
+  clearTimeout(dockRefreshTimers[path]);
+  dockRefreshTimers[path] = setTimeout(() => {
+    dockOpenFile(path, false);
+    if (dockState.active === path) loadFileIntoDock(path);
+  }, 300);
+  if (dockState.follow) {
+    clearTimeout(dockRefreshTimers[path + ':open']);
+    dockRefreshTimers[path + ':open'] = setTimeout(() => {
+      dockOpenFile(path, true);
+    }, 350);
+  }
+}
+
+function dockRunEnded() {
+  if (!dockState.follow) return;
+  if (dockState.active !== 'preview') setDockTab('preview');
+}
+
+function dockFlip() {
+  if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+  if (dockState.active === 'preview') {
+    if (dockState.fileTabs.length) setDockTab(dockState.fileTabs[0].path);
+  } else {
+    setDockTab('preview');
+  }
+}
+
+function setupDockTabs() {
+  renderDockTabs();
+}
+
+function setupDockResize() {
+  const handle = $('#dock-resize');
+  const dock = $('#dock');
+  let dragging = false;
+  const stored = parseInt(localStorage.getItem('xd-dock-w'), 10);
+  if (stored >= 320) dock.style.width = `${stored}px`;
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true;
+    document.body.classList.add('dock-resizing');
+    e.preventDefault();
+  });
+  window.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const w = Math.min(window.innerWidth - 360, Math.max(320, window.innerWidth - e.clientX));
+    dock.style.width = `${w}px`;
+  });
+  window.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    document.body.classList.remove('dock-resizing');
+    localStorage.setItem('xd-dock-w', String(dock.offsetWidth));
+    setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
+  });
+  handle.addEventListener('dblclick', () => {
+    dock.style.width = '';
+    localStorage.removeItem('xd-dock-w');
+    setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
+  });
 }
 
 /* ---------------- migration view ---------------- */

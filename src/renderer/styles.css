@@ -655,3 +655,65 @@ webview { width: 100%; height: 100%; border: none; display: block; }
 
 /* dock preview keeps its place on the far right in studio mode */
 #app.studio #dock { border-left: 1px solid var(--border-subtle); }
+
+/* ---------------- dock tabs + resizer + file viewer ---------------- */
+
+#dock { position: relative; }
+#dock-resize {
+  position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
+  cursor: col-resize; z-index: 30;
+}
+#dock-resize:hover, body.dock-resizing #dock-resize { background: rgba(113,112,255,0.4); }
+body.dock-resizing { cursor: col-resize !important; user-select: none; }
+body.dock-resizing #dock-webview { pointer-events: none; }
+
+#dock-tabs {
+  display: flex; gap: 2px; align-items: flex-end;
+  padding: 5px 8px 0; overflow-x: auto;
+  border-bottom: 1px solid var(--border-subtle); min-height: 27px;
+}
+.dock-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; font-size: 11.5px; white-space: nowrap;
+  color: var(--text-tertiary); cursor: pointer;
+  border: 1px solid transparent; border-bottom: none;
+  border-radius: 6px 6px 0 0;
+}
+.dock-tab:hover { color: var(--text-primary); background: rgba(255,255,255,0.04); }
+.dock-tab.active {
+  color: var(--text-primary);
+  background: rgba(113,112,255,0.14);
+  border-color: rgba(113,112,255,0.35);
+}
+.dock-tab.fresh { animation: docktab-flash 1.3s ease; }
+@keyframes docktab-flash {
+  0% { background: rgba(113,112,255,0.55); color: #fff; }
+  100% { background: transparent; }
+}
+.dock-tab .tab-close { opacity: 0.5; padding: 0 1px; font-size: 12px; }
+.dock-tab .tab-close:hover { opacity: 1; color: var(--red, #ff6b6b); }
+
+#dock-fileview {
+  position: absolute; inset: 0; z-index: 10;
+  display: flex; flex-direction: column; background: #0b0c0e;
+}
+#dock-fileview.hidden { display: none; }
+#dock-filepath {
+  padding: 6px 12px; font-size: 10.5px; color: var(--text-quaternary);
+  border-bottom: 1px solid var(--border-subtle); word-break: break-all;
+  flex-shrink: 0;
+}
+#dock-filescroll { flex: 1; overflow: auto; }
+.dock-file-inner { display: flex; align-items: flex-start; min-width: 100%; width: max-content; }
+#dock-filegutter {
+  margin: 0; padding: 10px 8px 28px 0; text-align: right;
+  font-size: 11.5px; line-height: 1.5; color: var(--text-quaternary);
+  user-select: none; white-space: pre;
+  border-right: 1px solid var(--border-subtle); min-width: 42px;
+  position: sticky; left: 0; background: #0b0c0e;
+}
+#dock-filecode {
+  margin: 0; padding: 10px 16px 28px 14px;
+  font-size: 11.5px; line-height: 1.5; color: var(--text-primary);
+  white-space: pre;
+}
