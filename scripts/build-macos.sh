@@ -17,11 +17,7 @@ RES="$APP/Contents/Resources"
 PYVER="3.13"
 
 cd "$ROOT"
-VERSION=$(python3 - "$ENGINE_SRC/pyproject.toml" <<'EOF'
-import tomllib, sys
-print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])
-EOF
-)
+VERSION=$(python3 -c "import json; print(json.load(open('$ROOT/package.json'))['version'])")
 echo "==> Xavani Desktop $VERSION from engine: $ENGINE_SRC"
 
 rm -rf "$STAGE"
