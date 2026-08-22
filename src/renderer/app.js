@@ -70,6 +70,14 @@ async function init() {
     state.cliCommands = d.commands || [];
     buildChips();
   }).catch(() => {});
+  dapi('/desktop/api/commands').then((r) => r.json()).then((d) => {
+    const known = new Set(state.cliCommands.map((c) => c.name));
+    const registry = (d.commands || [])
+      .filter((c) => !known.has(c.name))
+      .map((c) => ({ name: c.name, desc: c.desc || c.args_hint || '', args: [`/${c.name}`] }));
+    state.cliCommands = [...state.cliCommands, ...registry];
+    buildChips();
+  }).catch(() => {});
   setupSlash();
   setupModelMenus();
   setupDock();
