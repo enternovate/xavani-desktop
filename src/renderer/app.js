@@ -524,6 +524,7 @@ function switchView(name) {
   if (name === 'skills') loadSkills();
   if (name === 'cron') loadCron();
   if (name === 'status') loadStatus();
+  if (name === 'ops') loadOps();
   if (name === 'settings') loadSettings();
   if (name === 'constellation') loadConstellation();
   if (name === 'console') ensureConsole();
@@ -858,6 +859,133 @@ async function loadSettings() {
     return b;
   })()));
   box.appendChild(ac);
+}
+
+/* ---------------- agent ops (loops · eval · diff · permissions) ---------------- */
+
+async function runCli(args, timeout = 180) {
+  const res = await dapi('/desktop/api/cli', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ args, timeout }),
+  });
+  return res.json();
+}
+
+async function loadOps() {
+  const box = $('#ops-panel');
+  box.innerHTML = '<div class="panel-title">Agent ops</div><div class="panel-desc">Live CLI surfaces for long-running engine features. Full interactivity stays in Console.</div>';
+
+  const mkCard = (title, desc) => {
+    const c = settingsCard(title, desc);
+    const pre = document.createElement('pre');
+    pre.className = 'mono';
+    pre.style.cssText = 'max-height:220px;overflow:auto;font-size:11px;line-height:1.5;background:#0b0c0f;border:1px solid var(--border-subtle);border-radius:8px;padding:10px;margin-top:8px;white-space:pre-wrap;';
+    pre.textContent = '(idle)';
+    c.appendChild(pre);
+    box.appendChild(c);
+    return { card: c, out: pre };
+  };
+
+  // --- Loops ---
+  {
+    const { card, out } = mkCard('Loops', 'Repeating tasks with stop conditions.');
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    row.innerHTML = `<button class="btn ghost sm" data-cmd="loops">List loops</button>
+      <input id="ops-loop-id" placeholder="loop id" style="width:110px">
+      <button class="btn danger sm" id="ops-loop-stop">Stop loop</button>`;
+    card.appendChild(row);
+    card.querySelector('[data-cmd="loops"]').addEventListener('click', async () => {
+      out.textContent = 'Running…';
+      const d = await runCli(['loops']);
+      out.textContent = d.output || `(exit ${d.exit_code})`;
+    });
+    card.querySelector('#ops-loop-stop').addEventListener('click', async () => {
+      const id = card.querySelector('#ops-loop-id').value.trim();
+      if (!id) { toast('loop id required'); return; }
+      out.textContent = `Stopping ${id}…`;
+      const d = await runCli(['loop', 'stop', id]);
+      out.textContent = d.output || `(exit ${d.exit_code})`;
+    });
+  }
+
+  // --- Eval ---
+  {
+    const { card, out } = mkCard('Eval harness', 'Run the baseline task bench without spending provider credits (--faux), or a real scored run.');
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    row.innerHTML = `<button class="btn ghost sm" id="ops-eval-faux">Run faux bench</button>
+      <span class="dim">real runs cost tokens — use Console for those</span>`;
+    card.appendChild(row);
+    card.querySelector('#ops-eval-faux').addEventListener('click', async () => {
+      out.textContent = 'Running eval --faux (can take a minute)…';
+      const d = await runCli(['eval', '--faux'], 480);
+      out.textContent = d.output || `(exit ${d.exit_code})`;
+    });
+  }
+
+  // --- Staged changes / diff ---
+  {
+    const { card, out } = mkCard('Staged writes & diff review', 'Review what the agent wants to write before it lands.');
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    row.innerHTML = `<button class="btn ghost sm" data-cmd="diff-status">Status</button>
+      <button class="btn ghost sm" data-cmd="diff-on">Diff on</button>
+      <button class="btn ghost sm" data-cmd="diff-off">Diff off</button>`;
+    card.appendChild(row);
+    for (const b of card.querySelectorAll('[data-cmd]')) {
+      b.addEventListener('click', async () => {
+        out.textContent = 'Running…';
+        const cmd = b.dataset.cmd;
+        const args = cmd === 'diff-status' ? [] : ['diff', cmd === 'diff-on' ? 'on' : 'off'];
+        const d = await runCli(args);
+        out.textContent = d.output || `(exit ${d.exit_code})`;
+        if (cmd !== 'diff-status') setTimeout(async () => {
+          const s = await runCli([]);
+          out.textContent = s.output || out.textContent;
+        }, 800);
+      });
+    }
+  }
+
+  // --- Permissions ---
+  {
+    const { card, out } = mkCard('Permissions', 'Command approval patterns (always-allow rules).');
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    row.innerHTML = `<button class="btn ghost sm" id="ops-perm-list">List</button>
+      <input id="ops-perm-pat" placeholder="pattern e.g. git *" style="width:150px">
+      <button class="btn primary sm" id="ops-perm-add">Add</button>
+      <button class="btn danger sm" id="ops-perm-remove">Remove</button>`;
+    card.appendChild(row);
+    const list = () => runCli(['permissions', 'list']);
+    card.querySelector('#ops-perm-list').addEventListener('click', async () => {
+      out.textContent = 'Running…';
+      out.textContent = (await list()).output || '(none)';
+    });
+    card.querySelector('#ops-perm-add').addEventListener('click', async () => {
+      const pat = card.querySelector('#ops-perm-pat').value.trim();
+      if (!pat) { toast('pattern required'); return; }
+      out.textContent = `Adding ${pat}…`;
+      out.textContent = (await runCli(['permissions', 'add', pat])).output || 'added';
+      setTimeout(async () => { out.textContent = (await list()).output || ''; }, 400);
+    });
+    card.querySelector('#ops-perm-remove').addEventListener('click', async () => {
+      const pat = card.querySelector('#ops-perm-pat').value.trim();
+      if (!pat) { toast('pattern required'); return; }
+      out.textContent = (await runCli(['permissions', 'remove', pat])).output || 'removed';
+      setTimeout(async () => { out.textContent = (await list()).output || ''; }, 400);
+    });
+  }
+
+  // auto-load the loops list on entry
+  const firstPre = box.querySelector('pre');
+  if (firstPre) {
+    firstPre.textContent = 'Loading…';
+    const d = await runCli(['loops']);
+    firstPre.textContent = d.output || '(no active loops)';
+  }
 }
 
 /* ---------------- console (full CLI via PTY) ---------------- */
