@@ -12,6 +12,12 @@ the agent's own HTTP API server with token streaming.
 
 ## Highlights
 
+- **v0.5.0 — CLI 0.2.0 parity** — every engine command in composer autocomplete, first-run
+  setup wizard (provider → model → toolsets → history import → workspace), full Settings view
+  (skins, models, effort/fast mode, toolsets, MCP servers, profiles, display, updates),
+  Effort + Fast chips in the topbar, GitHub release update badge, media visual edit
+  (rotate/flip/recolor images and SVG), and voice input with model transcription.
+  See `docs/release-notes-0.5.0.md`.
 - **Full CLI capability** — same engine, same tools, same `~/.xavani` home. Sessions created in
   the app are visible to the CLI and vice versa.
 - **Token streaming** — replies stream live via SSE (`message.delta`), with reasoning blocks,
