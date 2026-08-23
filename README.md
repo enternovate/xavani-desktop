@@ -12,6 +12,9 @@ the agent's own HTTP API server with token streaming.
 
 ## Highlights
 
+- **Version-aligned with the CLI** — desktop and xavani-agent ship the same version number
+  (0.2.0). Every CLI feature lands here too; `scripts/check_parity.sh` plus the weekly
+  `cli-parity` workflow fail loudly when a new CLI command is not yet surfaced in the app.
 - **v0.2.0 — CLI parity** — every engine command in composer autocomplete, first-run
   setup wizard (provider → model → toolsets → history import → workspace), full Settings view
   (skins, models, effort/fast mode, toolsets, MCP servers, profiles, display, updates),
