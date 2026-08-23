@@ -2438,11 +2438,83 @@ function renderDockTabs() {
 function setDockTab(id) {
   dockState.active = id;
   const isPreview = id === 'preview';
-  $('#dock-webview').style.display = isPreview ? '' : 'none';
-  $('#dock-fileview').classList.toggle('hidden', isPreview);
-  $('#dock-hint').style.display = (isPreview && !state.dockNavigated) ? '' : 'none';
+  const isTodo = id === 'todo';
+  $('#dock-webview').style.display = (isPreview && !isTodo) ? '' : 'none';
+  $('#dock-todoview').classList.toggle('hidden', !isTodo);
+  $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo);
+  $('#dock-hint').style.display = (isPreview && !isTodo && !state.dockNavigated) ? '' : 'none';
+  $('.dock-bar').classList.toggle('in-todo', isTodo);
   renderDockTabs();
-  if (!isPreview) loadFileIntoDock(id);
+  if (isTodo) loadTodos();
+  else if (!isPreview) loadFileIntoDock(id);
+}
+
+/* ---------------- dock to-do pane ---------------- */
+
+const todoState = { items: [], dragId: null };
+
+async function loadTodos() {
+  try {
+    const res = await dapi('/desktop/api/todos');
+    const d = await res.json();
+    todoState.items = d.items || [];
+    renderTodos();
+  } catch {
+    $('#todo-list').innerHTML = '<div class="empty">Could not load tasks.</div>';
+  }
+}
+
+function renderTodos() {
+  const list = $('#todo-list');
+  list.innerHTML = '';
+  if (!todoState.items.length) {
+    list.innerHTML = '<div class="empty">No tasks yet. Add one above.</div>';
+    return;
+  }
+  for (const item of todoState.items) {
+    const row = document.createElement('div');
+    row.className = `todo-item${item.status === 'completed' ? ' done' : ''}`;
+    row.draggable = true;
+    row.dataset.id = item.id;
+    row.innerHTML = `
+      <span class="todo-grip" title="Drag to reprioritise">⋮⋮</span>
+      <label class="wiz-check"><input type="checkbox" ${item.status === 'completed' ? 'checked' : ''}></label>
+      <span class="todo-text">${escapeHtml(item.content)}</span>
+      <button class="todo-del" title="Delete task">×</button>`;
+    row.querySelector('input').addEventListener('change', async (ev) => {
+      await dapi('/desktop/api/todos/item', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.id, status: ev.target.checked ? 'completed' : 'pending' }),
+      }).catch(() => {});
+      loadTodos();
+    });
+    row.querySelector('.todo-del').addEventListener('click', async () => {
+      await dapi('/desktop/api/todos/delete', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: item.id }),
+      }).catch(() => {});
+      loadTodos();
+    });
+    row.addEventListener('dragstart', () => { todoState.dragId = item.id; row.classList.add('dragging'); });
+    row.addEventListener('dragend', () => { todoState.dragId = null; row.classList.remove('dragging'); });
+    row.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const dragging = list.querySelector('.dragging');
+      if (!dragging || dragging === row) return;
+      const rect = row.getBoundingClientRect();
+      const after = (e.clientY - rect.top) > rect.height / 2;
+      if (after) row.after(dragging); else row.before(dragging);
+    });
+    row.addEventListener('drop', async () => {
+      const order = [...list.querySelectorAll('.todo-item')].map((el) => el.dataset.id);
+      await dapi('/desktop/api/todos', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order }),
+      }).catch(() => {});
+      loadTodos();
+    });
+    list.appendChild(row);
+  }
 }
 
 async function loadFileIntoDock(path) {
@@ -2525,6 +2597,27 @@ function dockFlip() {
 
 function setupDockTabs() {
   renderDockTabs();
+  for (const btn of document.querySelectorAll('.dock-tabs-head .dock-tab')) {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.dock-tabs-head .dock-tab').forEach((b) => b.classList.remove('active'));
+      btn.classList.add('active');
+      setDockTab(btn.dataset.docktab);
+    });
+  }
+  $('#todo-add').addEventListener('click', async () => {
+    const input = $('#todo-input');
+    const content = input.value.trim();
+    if (!content) return;
+    input.value = '';
+    await dapi('/desktop/api/todos/add', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content }),
+    }).catch(() => {});
+    loadTodos();
+  });
+  $('#todo-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') $('#todo-add').click();
+  });
 }
 
 function setupDockResize() {
