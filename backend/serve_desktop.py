@@ -1054,6 +1054,41 @@ def build_desktop_app(api_port: int):
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
 
+    @routes.get("/desktop/api/fs/find")
+    async def fs_find(request: "web.Request") -> "web.Response":
+        name = request.query.get("name", "").strip()
+        if not name or "/" in name or "\\" in name or ".." in name:
+            return web.json_response({"error": "bad name"}, status=400)
+        root = _ws_state_path_root()
+        matches = sorted(p for p in root.rglob(name) if p.is_file())
+        return web.json_response({"path": str(matches[0]) if matches else None, "count": len(matches)})
+
+    @routes.post("/desktop/api/fs/write-b64")
+    async def fs_write_b64(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+            path = _safe_path(body.get("path", ""))
+            import base64 as _b64
+
+            raw = _b64.b64decode(str(body.get("data_b64", "")))
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        except Exception as exc:
+            return web.json_response({"error": f"bad payload: {exc}"}, status=400)
+        if not raw:
+            return web.json_response({"error": "empty payload"}, status=400)
+        if len(raw) > 20 * 1024 * 1024:
+            return web.json_response({"error": "over 20MB"}, status=413)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if path.exists():
+                backup = path.with_suffix(path.suffix + ".bak")
+                backup.write_bytes(path.read_bytes())
+            path.write_bytes(raw)
+            return web.json_response({"ok": True, "path": str(path), "bytes": len(raw)})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+
     @routes.post("/desktop/api/fs/mutate")
     async def fs_mutate(request: "web.Request") -> "web.Response":
         try:
