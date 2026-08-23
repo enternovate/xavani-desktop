@@ -133,6 +133,60 @@ function sendToWindow(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 }
 
+/* ---------------- update check (GitHub releases, anonymous GET) ---------------- */
+
+const UPDATE_REPO = 'enternovate/xavani-desktop';
+const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+let lastUpdateInfo = null;
+
+function isNewer(remote, local) {
+  const parse = (s) => String(s).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const [a, b, c] = parse(remote);
+  const [x, y, z] = parse(local);
+  if (a !== x) return a > x;
+  if (b !== y) return b > y;
+  return c > z;
+}
+
+function fetchJson(url, timeoutMs = 10000) {
+  return new Promise((resolve) => {
+    const req = http.get(url, {
+      headers: { 'User-Agent': 'xavani-desktop', Accept: 'application/vnd.github+json' },
+      timeout: timeoutMs,
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch { resolve(null); }
+      });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+  });
+}
+
+async function checkForUpdates() {
+  const fake = process.env.XAVANI_DESKTOP_FAKE_UPDATE;
+  if (fake) {
+    lastUpdateInfo = { current: app.getVersion(), latest: fake, updateAvailable: isNewer(fake, app.getVersion()), url: `https://github.com/${UPDATE_REPO}/releases/latest` };
+    sendToWindow('update-info', lastUpdateInfo);
+    return lastUpdateInfo;
+  }
+  const rel = await fetchJson(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`);
+  if (!rel || !rel.tag_name) {
+    lastUpdateInfo = { error: 'could not reach GitHub releases', current: app.getVersion(), updateAvailable: false };
+    return lastUpdateInfo;
+  }
+  lastUpdateInfo = {
+    current: app.getVersion(),
+    latest: rel.tag_name,
+    updateAvailable: isNewer(rel.tag_name, app.getVersion()),
+    url: rel.html_url || `https://github.com/${UPDATE_REPO}/releases/latest`,
+  };
+  sendToWindow('update-info', lastUpdateInfo);
+  return lastUpdateInfo;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -241,9 +295,17 @@ if (!gotLock) {
     ipcMain.handle('open-external', (_e, u) => {
       if (typeof u === 'string' && /^https?:\/\//.test(u)) shell.openExternal(u);
     });
+    ipcMain.handle('set-zoom', (_e, z) => {
+      const factor = Math.min(Math.max(Number(z) || 1, 0.5), 2);
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomFactor(factor);
+      return factor;
+    });
+    ipcMain.handle('check-for-updates', () => checkForUpdates());
 
     createWindow();
     startBackend();
+    setInterval(checkForUpdates, UPDATE_INTERVAL_MS);
+    setTimeout(checkForUpdates, 8000);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

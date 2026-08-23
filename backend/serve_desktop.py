@@ -550,6 +550,77 @@ def build_desktop_app(api_port: int):
             "fast_supported": fast_supported,
         })
 
+    # ---------------- settings (whitelisted config sections) ----------------
+
+    _SETTINGS_KEYS = frozenset({"permissions", "mcp_servers", "memory", "tools", "display", "terminal"})
+
+    @routes.get("/desktop/api/settings")
+    async def settings_get(_request: "web.Request") -> "web.Response":
+        cfg = _load_config()
+        return web.json_response({k: cfg.get(k) for k in sorted(_SETTINGS_KEYS)})
+
+    @routes.post("/desktop/api/settings")
+    async def settings_set(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        bad = [k for k in body if k not in _SETTINGS_KEYS]
+        if bad:
+            return web.json_response({"error": f"keys not editable here: {', '.join(bad)}"}, status=400)
+        config_path = _xavani_home() / "config.yaml"
+        try:
+            from ruamel.yaml import YAML
+
+            yaml = YAML(typ="rt")
+            yaml.preserve_quotes = True
+            data = yaml.load(config_path) if config_path.exists() else {}
+            if data is None:
+                data = {}
+            for key, value in body.items():
+                if value is None:
+                    data.pop(key, None)
+                else:
+                    data[key] = value
+            with open(config_path, "w", encoding="utf-8") as fh:
+                yaml.dump(data, fh)
+        except Exception as exc:
+            return web.json_response({"error": f"config write failed: {exc}"}, status=500)
+        return web.json_response({"ok": True})
+
+    @routes.get("/desktop/api/skins")
+    async def skins_list(_request: "web.Request") -> "web.Response":
+        try:
+            from xavani_cli.skin_engine import get_active_skin_name, list_skins
+
+            return web.json_response({"skins": list_skins(), "active": get_active_skin_name()})
+        except Exception as exc:
+            return web.json_response({"skins": [], "active": "", "error": str(exc)})
+
+    @routes.post("/desktop/api/skins/activate")
+    async def skins_activate(request: "web.Request") -> "web.Response":
+        body = await request.json()
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return web.json_response({"error": "name required"}, status=400)
+        try:
+            from xavani_cli.skin_engine import set_active_skin
+
+            set_active_skin(name)
+            return web.json_response({"ok": True, "active": name})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    @routes.get("/desktop/api/profiles")
+    async def profiles_list(_request: "web.Request") -> "web.Response":
+        try:
+            from xavani_cli.profiles import get_active_profile_name, list_profiles
+
+            rows = [{"name": p.name, "home": str(getattr(p, "home", ""))} for p in list_profiles()]
+            return web.json_response({"profiles": rows, "active": get_active_profile_name()})
+        except Exception as exc:
+            return web.json_response({"profiles": [], "active": "", "error": str(exc)})
+
     # ---------------- skills hub (GitHub-backed) ----------------
 
     @routes.get("/desktop/api/skills/hub/search")
