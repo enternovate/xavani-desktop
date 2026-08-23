@@ -877,7 +877,43 @@ async function loadCron() {
     const data = await res.json();
     const jobs = Array.isArray(data) ? data : (data.jobs || []);
     box.innerHTML = '<div class="panel-title">Cron jobs</div><div class="panel-desc">Scheduled agent jobs. Same store as the CLI and gateway.</div>';
-    if (!jobs.length) { box.innerHTML += '<div class="empty">No cron jobs</div>'; return; }
+
+    // Create form
+    const form = document.createElement('div');
+    form.className = 'cron-form';
+    form.innerHTML = `<input id="cron-name" placeholder="job name" style="width:150px">
+      <input id="cron-schedule" placeholder="schedule — e.g. 30m, 0 9 * * *, or ISO time" style="flex:1;min-width:180px" class="mono">
+      <input id="cron-prompt" placeholder="what the agent should do each run" style="flex:2;min-width:240px">
+      <button id="cron-create" class="btn primary sm">Schedule</button>`;
+    box.appendChild(form);
+    const createErr = document.createElement('div');
+    createErr.id = 'cron-create-err';
+    createErr.className = 'dim';
+    box.appendChild(createErr);
+    form.querySelector('#cron-create').addEventListener('click', async () => {
+      const errEl = document.querySelector('#cron-create-err');
+      errEl.textContent = '';
+      const name = form.querySelector('#cron-name').value.trim();
+      const schedule = form.querySelector('#cron-schedule').value.trim();
+      const prompt = form.querySelector('#cron-prompt').value.trim();
+      if (!name || !schedule || !prompt) {
+        errEl.textContent = 'Name, schedule, and prompt are all required.';
+        return;
+      }
+      try {
+        const res = await api('/api/jobs', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, schedule, prompt }),
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        toast(`Scheduled "${name}" (${schedule})`);
+        loadCron();
+      } catch (e) {
+        errEl.textContent = `Create failed: ${e}`;
+      }
+    });
+
+    if (!jobs.length) { box.innerHTML += '<div class="empty">No cron jobs yet. Schedule one above.</div>'; return; }
     for (const j of jobs) {
       const actions = document.createElement('div');
       actions.style.cssText = 'display:flex;gap:6px;flex-shrink:0';

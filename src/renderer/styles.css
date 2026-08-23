@@ -965,3 +965,17 @@ body.dock-resizing #dock-webview { pointer-events: none; }
   text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 6px;
 }
 .skill-raw { padding: 10px; font-size: 11px; white-space: pre-wrap; }
+
+/* ---------------- cron create form ---------------- */
+
+.cron-form {
+  display: flex; gap: 6px; flex-wrap: wrap; align-items: center;
+  margin: 8px 0 4px;
+}
+.cron-form input {
+  background: var(--bg-surface); border: 1px solid var(--border-standard);
+  border-radius: 7px; color: var(--text-primary); font-size: 12px;
+  padding: 7px 10px; outline: none;
+}
+.cron-form input:focus { border-color: var(--accent); }
+#cron-create-err { min-height: 16px; margin-bottom: 6px; }
