@@ -101,6 +101,7 @@ async function init() {
 
   $('#send').addEventListener('click', onSend);
   $('#stop').addEventListener('click', onStop);
+  $('#mic').addEventListener('click', toggleRecord);
   $('#new-chat').addEventListener('click', newChat);
   $('#input').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); onSend(); }
@@ -1337,6 +1338,81 @@ async function saveModal() {
   } catch (e) {
     err.textContent = String(e.message || e);
     err.classList.remove('hidden');
+  }
+}
+
+/* ---------------- voice recorder ---------------- */
+
+const micState = { rec: null, chunks: [], stream: null, timer: null };
+
+function setMicUI(stateName) {
+  const btn = $('#mic');
+  if (!btn) return;
+  btn.classList.toggle('recording', stateName === 'recording');
+  if (stateName === 'recording') {
+    const started = Date.now();
+    btn.title = 'Stop recording';
+    micState.timer = setInterval(() => {
+      btn.textContent = `${Math.floor((Date.now() - started) / 1000)}s`;
+    }, 500);
+  } else {
+    clearInterval(micState.timer);
+    btn.innerHTML = '<svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="4.25" y="1" width="3.5" height="6.5" rx="1.75" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 6a3.5 3.5 0 0 0 7 0M6 9.5V11" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
+    btn.title = 'Record voice — transcribed into this box';
+  }
+}
+
+async function toggleRecord() {
+  if (micState.rec && micState.rec.state === 'recording') {
+    micState.rec.stop();
+    return;
+  }
+  try {
+    micState.stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (e) {
+    toast(`mic blocked: ${e.message || e}`);
+    return;
+  }
+  micState.chunks = [];
+  let rec;
+  try {
+    rec = new MediaRecorder(micState.stream);
+  } catch (e) {
+    toast(`MediaRecorder unavailable: ${e.message || e}`);
+    micState.stream.getTracks().forEach((t) => t.stop());
+    return;
+  }
+  micState.rec = rec;
+  rec.ondataavailable = (ev) => { if (ev.data.size) micState.chunks.push(ev.data); };
+  rec.onstop = async () => {
+    setMicUI('idle');
+    micState.stream.getTracks().forEach((t) => t.stop());
+    micState.stream = null;
+    const blob = new Blob(micState.chunks, { type: 'audio/webm' });
+    micState.rec = null;
+    await submitTranscription(blob);
+  };
+  rec.start();
+  setMicUI('recording');
+}
+
+async function submitTranscription(blob) {
+  if (!blob.size) { toast('nothing recorded'); return; }
+  toast('transcribing…', 8000);
+  try {
+    const form = new FormData();
+    form.append('audio', blob, 'speech.webm');
+    const res = await dapi('/desktop/api/transcribe', { method: 'POST', body: form });
+    const d = await res.json();
+    if (d.error) throw new Error(d.error);
+    const input = $('#input');
+    const cur = input.value;
+    input.value = cur ? `${cur} ${d.text}` : d.text;
+    autosize();
+    input.focus();
+    toast(`transcribed ${d.text.length} chars — review, then send`);
+  } catch (e) {
+    toast(`transcription: ${e.message || e}`);
   }
 }
 
