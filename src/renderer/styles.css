@@ -769,6 +769,17 @@ body.dock-resizing #dock-webview { pointer-events: none; }
 .card.set-card .c-body { flex-basis: 100%; }
 .card.set-card .set-row { flex-basis: 100%; }
 .card.set-card pre { flex-basis: 100%; }
+#settings-groups { display: flex; gap: 6px; margin: 4px 0 10px; }
+.set-group { min-width: 64px; text-align: center; }
+.set-cluster { display: none; }
+#settings-panel.grouped .set-card { display: none; }
+#settings-panel.show-general .set-card[data-group="general"],
+#settings-panel.show-models .set-card[data-group="models"],
+#settings-panel.show-tools .set-card[data-group="tools"] {
+  display: flex;
+}
+#settings-panel:not(.grouped) .set-cluster { display: block; }
+#settings-panel.grouped .set-cluster { display: contents; }
 .set-row .dim { flex: 1; min-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .set-row > .mono:first-child { flex: 0 0 auto; }
 .set-row select, .set-row input {
