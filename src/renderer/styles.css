@@ -765,6 +765,8 @@ body.dock-resizing #dock-webview { pointer-events: none; }
 /* ---------- settings rows + update badge ---------- */
 
 .set-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 13px; color: var(--text-secondary); flex-wrap: wrap; }
+.set-row .dim { flex: 1; min-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.set-row > .mono:first-child { flex: 0 0 auto; }
 .set-row select, .set-row input {
   background: #0b0c0f; color: var(--text-primary);
   border: 1px solid var(--border-subtle); border-radius: 6px; padding: 5px 8px; font-size: 12.5px;

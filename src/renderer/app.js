@@ -40,6 +40,10 @@ function toast(msg, ms = 4000) {
 
 /* ---------------- boot ---------------- */
 
+window.__errs = window.__errs || [];
+window.addEventListener('error', (e) => { window.__errs.push(String(e.message || e)); });
+window.addEventListener('unhandledrejection', (e) => { window.__errs.push(`unhandled: ${e.reason}`); });
+
 let booted = false;
 
 window.xavaniDesktop.onBackendReady(({ apiPort, desktopPort }) => {
