@@ -948,3 +948,20 @@ body.dock-resizing #dock-webview { pointer-events: none; }
 }
 .pm-item:hover { background: var(--bg-hover); color: var(--text-primary); }
 .pm-item.active { color: var(--accent-bright); }
+
+/* ---------------- skills marketplace ---------------- */
+
+.skill-searchrow {
+  display: flex; gap: 6px; align-items: center; margin: 8px 0 14px;
+}
+.skill-searchrow input {
+  flex: 1; background: var(--bg-surface); border: 1px solid var(--border-standard);
+  border-radius: 7px; color: var(--text-primary); font-size: 12.5px;
+  padding: 8px 11px; outline: none;
+}
+.skill-searchrow input:focus { border-color: var(--accent); }
+.panel-subtitle {
+  font-size: 12px; font-weight: 700; color: var(--text-tertiary);
+  text-transform: uppercase; letter-spacing: 0.06em; margin: 14px 0 6px;
+}
+.skill-raw { padding: 10px; font-size: 11px; white-space: pre-wrap; }

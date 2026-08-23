@@ -737,11 +737,135 @@ async function loadSkills() {
   try {
     const res = await dapi('/desktop/api/skills');
     const { skills } = await res.json();
-    box.innerHTML = `<div class="panel-title">Skills</div><div class="panel-desc">${skills.length} installed in ${escapeHtml(state.status ? state.status.xavani_home : '~/.xavani')}/skills</div>`;
-    if (!skills.length) { box.innerHTML += '<div class="empty">No skills installed</div>'; return; }
-    for (const s of skills) box.appendChild(cardEl(s.name, s.description, { mono: true }));
+
+    const title = document.createElement('div');
+    title.className = 'panel-title';
+    title.textContent = 'Skills';
+    const desc = document.createElement('div');
+    desc.className = 'panel-desc';
+    desc.innerHTML = `${skills.length} installed in ${escapeHtml((state.status && state.status.xavani_home) || '~/.xavani')}/skills`;
+    box.innerHTML = '';
+    box.appendChild(title);
+    box.appendChild(desc);
+
+    // Hub search row
+    const searchRow = document.createElement('div');
+    searchRow.className = 'skill-searchrow';
+    searchRow.innerHTML = `<input id="skill-search" placeholder="Describe what you need — e.g. trading backtest helpers" spellcheck="false">
+      <button id="skill-search-go" class="btn primary sm">Search</button>
+      <button id="skill-search-clear" class="btn ghost sm hidden">Clear</button>
+      <span id="skill-search-state" class="dim"></span>`;
+    box.appendChild(searchRow);
+
+    const resultsWrap = document.createElement('div');
+    resultsWrap.id = 'skill-hub-results';
+    box.appendChild(resultsWrap);
+
+    const doSearch = async () => {
+      const q = document.querySelector('#skill-search').value.trim();
+      if (!q) return;
+      const stateEl = document.querySelector('#skill-search-state');
+      const wrap = document.querySelector('#skill-hub-results');
+      stateEl.textContent = 'Searching registries…';
+      wrap.innerHTML = '';
+      try {
+        const r2 = await dapi(`/desktop/api/skills/hub/search?q=${encodeURIComponent(q)}`);
+        const d = await r2.json();
+        renderHubResults(wrap, d, q);
+        stateEl.textContent = '';
+        document.querySelector('#skill-search-clear').classList.remove('hidden');
+      } catch (e) {
+        stateEl.textContent = `Search failed: ${e}`;
+      }
+    };
+    document.querySelector('#skill-search-go').addEventListener('click', doSearch);
+    document.querySelector('#skill-search').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') doSearch();
+    });
+    document.querySelector('#skill-search-clear').addEventListener('click', () => {
+      document.querySelector('#skill-search').value = '';
+      document.querySelector('#skill-hub-results').innerHTML = '';
+      document.querySelector('#skill-search-clear').classList.add('hidden');
+    });
+
+    // Installed list
+    const instHead = document.createElement('div');
+    instHead.className = 'panel-subtitle';
+    instHead.textContent = 'Installed';
+    box.appendChild(instHead);
+    if (!skills.length) {
+      box.insertAdjacentHTML('beforeend', '<div class="empty">No skills installed</div>');
+      return;
+    }
+    for (const s of skills) {
+      const actions = document.createElement('div');
+      actions.style.cssText = 'display:flex;gap:6px;flex-shrink:0';
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn danger sm';
+      delBtn.textContent = 'Uninstall';
+      delBtn.addEventListener('click', async () => {
+        delBtn.disabled = true;
+        delBtn.textContent = '…';
+        try {
+          await dapi('/desktop/api/skills/uninstall', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: s.name }),
+          });
+          toast(`${s.name} uninstalled`);
+          loadSkills();
+        } catch (e) {
+          toast(`Uninstall failed: ${e}`);
+          delBtn.disabled = false;
+          delBtn.textContent = 'Uninstall';
+        }
+      });
+      actions.appendChild(delBtn);
+      box.appendChild(cardEl(s.name, s.description, null, actions));
+    }
   } catch (err) {
     box.innerHTML = `<div class="empty">Failed to load: ${escapeHtml(String(err))}</div>`;
+  }
+}
+
+function renderHubResults(wrap, d, query) {
+  const raw = typeof d.stdout === 'string' ? d.stdout : JSON.stringify(d);
+  let entries = [];
+  try {
+    if (d.results) entries = d.results;
+    else if (Array.isArray(d)) entries = d;
+  } catch {}
+  if (!entries.length) {
+    // CLI output fallback: show raw text block
+    wrap.innerHTML = `<pre class="mono skill-raw">${escapeHtml(raw.slice(0, 3000))}</pre>`;
+    return;
+  }
+  for (const item of entries) {
+    const card = cardEl(
+      item.name || item.id || 'skill',
+      item.description || '',
+      { text: item.source ? `source: ${item.source}` : '', mono: true },
+      (() => {
+        const b = document.createElement('button');
+        b.className = 'btn primary sm';
+        b.textContent = 'Install';
+        b.addEventListener('click', async () => {
+          b.disabled = true; b.textContent = 'Installing…';
+          try {
+            await dapi('/desktop/api/skills/hub/install', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id: item.identifier || item.id || item.name }),
+            });
+            b.textContent = 'Installed ✓';
+            loadSkills();
+          } catch (e) {
+            b.textContent = `Failed: ${e}`;
+            b.disabled = false;
+          }
+        });
+        return b;
+      })(),
+    );
+    wrap.appendChild(card);
   }
 }
 
