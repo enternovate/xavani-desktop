@@ -135,6 +135,18 @@ async function init() {
 
   $('#input').focus();
   checkFirstRun();
+
+  window.xavaniDesktop.onUpdateInfo((info) => renderUpdateBadge(info));
+}
+
+function renderUpdateBadge(info) {
+  const badge = $('#update-badge');
+  if (!badge || !info) return;
+  badge.classList.toggle('hidden', !info.updateAvailable);
+  if (info.updateAvailable) {
+    badge.textContent = `↑ v${String(info.latest).replace(/^v/, '')}`;
+    badge.onclick = () => info.url && window.xavaniDesktop.openExternal(info.url);
+  }
 }
 
 async function refreshStatus() {
@@ -511,6 +523,7 @@ function switchView(name) {
   if (name === 'skills') loadSkills();
   if (name === 'cron') loadCron();
   if (name === 'status') loadStatus();
+  if (name === 'settings') loadSettings();
   if (name === 'constellation') loadConstellation();
   if (name === 'console') ensureConsole();
   if (name === 'import') loadMigration();
@@ -655,6 +668,195 @@ async function loadStatus() {
     warn.textContent = 'No model configured yet — run `xavani setup` in a terminal, or set config.yaml.';
     box.appendChild(warn);
   }
+}
+
+/* ---------------- settings view ---------------- */
+
+function settingsCard(title, desc) {
+  const card = document.createElement('div');
+  card.className = 'card';
+  card.innerHTML = `<div class="c-body"><div class="c-name">${escapeHtml(title)}</div>
+    ${desc ? `<div class="c-desc">${escapeHtml(desc)}</div>` : ''}</div>`;
+  return card;
+}
+
+async function loadSettings() {
+  const box = $('#settings-panel');
+  box.innerHTML = '<div class="empty">Loading…</div>';
+  box.innerHTML = '<div class="panel-title">Settings</div><div class="panel-desc">Everything is stored locally in ~/.xavani.</div>';
+
+  // --- Appearance ---
+  const skin = await dapi('/desktop/api/skins').then((r) => r.json()).catch(() => null);
+  if (skin) {
+    const c = settingsCard('Appearance', 'Engine skin used by the console and CLI surfaces.');
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    row.innerHTML = `<select id="set-skin">${(skin.skins || []).map((s) => `<option value="${s.name}"${s.name === skin.active ? ' selected' : ''}>${s.name}</option>`).join('')}</select>
+      <button class="btn ghost sm" id="set-skin-apply">Apply</button>`;
+    c.appendChild(row);
+    box.appendChild(c);
+    c.querySelector('#set-skin-apply').addEventListener('click', async () => {
+      const name = c.querySelector('#set-skin').value;
+      const res = await dapi('/desktop/api/skins/activate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const d = await res.json();
+      toast(d.ok ? `Skin set to ${name} (new console sessions)` : (d.error || 'failed'));
+    });
+  }
+
+  // --- Model & provider ---
+  const s = state.status || {};
+  const mc = settingsCard('Model & provider', 'Current model for new chats.');
+  mc.appendChild(cardEl(s.model || 'not configured', s.provider ? `provider: ${s.provider}` : 'open the picker to choose one', null, (() => {
+    const b = document.createElement('button');
+    b.className = 'btn ghost sm';
+    b.textContent = 'Change…';
+    b.addEventListener('click', () => { switchView('chat'); openModelModal(null); });
+    return b;
+  })()));
+  box.appendChild(mc);
+
+  // --- Effort & fast mode ---
+  await loadPrefs();
+  const pc = settingsCard('Reasoning effort & fast mode', 'Applies to new runs. Same controls as the topbar chips.');
+  const prow = document.createElement('div');
+  prow.className = 'set-row';
+  prow.innerHTML = `<select id="set-effort">${['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].map((e) =>
+    `<option value="${e}"${e === (state.prefs.effort || 'medium') ? ' selected' : ''}>${e}</option>`).join('')}</select>
+    <label class="wiz-check"><input type="checkbox" id="set-fast" ${state.prefs.fast_mode ? 'checked' : ''}> Fast mode</label>
+    <button class="btn primary sm" id="set-prefs-save">Save</button>`;
+  pc.appendChild(prow);
+  box.appendChild(pc);
+  pc.querySelector('#set-prefs-save').addEventListener('click', () => {
+    setPrefs({ effort: pc.querySelector('#set-effort').value, fast_mode: pc.querySelector('#set-fast').checked });
+  });
+
+  // --- Tools & toolsets ---
+  const tc = settingsCard('Tools & toolsets', 'What the agent may do in a session.');
+  try {
+    const { toolsets } = await dapi('/desktop/api/tools').then((r) => r.json());
+    for (const t of (toolsets || [])) {
+      const row = document.createElement('div');
+      row.className = 'set-row';
+      row.innerHTML = `<label class="wiz-check"><input type="checkbox" data-ts="${t.name}" ${t.enabled ? 'checked' : ''}> ${escapeHtml(t.name)}</label>
+        <span class="dim">${escapeHtml((t.description || '').slice(0, 80))}</span>`;
+      row.querySelector('input').addEventListener('change', async (ev) => {
+        await dapi('/desktop/api/tools/toggle', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: t.name, enabled: ev.target.checked }),
+        }).catch(() => {});
+        toast(`${t.name} ${ev.target.checked ? 'enabled' : 'disabled'} (new sessions)`);
+      });
+      tc.appendChild(row);
+    }
+  } catch {
+    tc.insertAdjacentHTML('beforeend', '<span class="dim">Could not load toolsets.</span>');
+  }
+  box.appendChild(tc);
+
+  // --- MCP servers ---
+  let mcpServers = {};
+  try {
+    const st = await dapi('/desktop/api/settings').then((r) => r.json());
+    mcpServers = st.mcp_servers || {};
+  } catch {}
+  const mcc = settingsCard('MCP servers', 'Stdio/HTTP tools the engine connects to at startup.');
+  for (const [name, cfgv] of Object.entries(mcpServers)) {
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    const cmd = typeof cfgv === 'object' && cfgv ? `${cfgv.command || ''} ${(cfgv.args || []).join(' ')}` : String(cfgv);
+    row.innerHTML = `<span class="mono">${escapeHtml(name)}</span> <span class="dim mono">${escapeHtml(cmd.trim())}</span>
+      <button class="btn danger sm set-mcp-del" data-name="${escapeHtml(name)}">Remove</button>`;
+    mcc.appendChild(row);
+  }
+  const addRow = document.createElement('div');
+  addRow.className = 'set-row';
+  addRow.innerHTML = `<input id="mcp-name" placeholder="name" style="width:120px">
+    <input id="mcp-cmd" placeholder="/path/to/server --args" class="mono">
+    <button class="btn ghost sm" id="mcp-add">Add</button>`;
+  mcc.appendChild(addRow);
+  box.appendChild(mcc);
+
+  const saveMcp = async (servers) => {
+    const res = await dapi('/desktop/api/settings', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mcp_servers: servers }),
+    });
+    const d = await res.json();
+    toast(d.ok ? 'MCP servers saved — reload the app or /reload-mcp to apply' : (d.error || 'save failed'));
+    if (d.ok) setTimeout(() => loadSettings(), 600);
+  };
+  mcc.querySelectorAll('.set-mcp-del').forEach((b) => {
+    b.addEventListener('click', () => {
+      const next = { ...mcpServers };
+      delete next[b.dataset.name];
+      saveMcp(next);
+    });
+  });
+  mcc.querySelector('#mcp-add').addEventListener('click', () => {
+    const name = mcc.querySelector('#mcp-name').value.trim();
+    const cmdLine = mcc.querySelector('#mcp-cmd').value.trim();
+    if (!name || !cmdLine) { toast('name and command required'); return; }
+    const parts = cmdLine.split(/\s+/);
+    saveMcp({ ...mcpServers, [name]: { command: parts[0], args: parts.slice(1), env: {} } });
+  });
+
+  // --- Profiles ---
+  const prof = await dapi('/desktop/api/profiles').then((r) => r.json()).catch(() => null);
+  if (prof) {
+    const pcc = settingsCard('Profiles', 'Isolated Xavani homes. Switch with `/profile` in the console — the app restarts into that profile.');
+    for (const p of (prof.profiles || [])) {
+      const row = document.createElement('div');
+      row.className = 'set-row';
+      row.innerHTML = `<span>${escapeHtml(p.name)}</span>${p.name === prof.active ? '<span class="wiz-ok">active</span>' : ''}`;
+      pcc.appendChild(row);
+    }
+    box.appendChild(pcc);
+  }
+
+  // --- Display zoom ---
+  const dc = settingsCard('Display', 'Interface zoom level.');
+  const zrow = document.createElement('div');
+  zrow.className = 'set-row';
+  const zoom = Number(localStorage.getItem('xz-zoom') || '1');
+  zrow.innerHTML = `<select id="set-zoom">${[0.85, 0.9, 1, 1.1, 1.25].map((z) =>
+    `<option value="${z}"${z === zoom ? ' selected' : ''}>${Math.round(z * 100)}%</option>`).join('')}</select>`;
+  dc.appendChild(zrow);
+  box.appendChild(dc);
+  dc.querySelector('#set-zoom').addEventListener('change', async (ev) => {
+    const z = Number(ev.target.value);
+    localStorage.setItem('xz-zoom', String(z));
+    if (window.xavaniDesktop.setZoom) window.xavaniDesktop.setZoom(z);
+  });
+
+  // --- Updates ---
+  const uc = settingsCard('Updates', 'Check GitHub releases for new desktop builds.');
+  const urow = document.createElement('div');
+  urow.className = 'set-row';
+  urow.innerHTML = `<button class="btn ghost sm" id="upd-check">Check now</button> <span id="upd-out" class="dim"></span>`;
+  uc.appendChild(urow);
+  box.appendChild(uc);
+  uc.querySelector('#upd-check').addEventListener('click', async () => {
+    const out = uc.querySelector('#upd-out');
+    out.textContent = 'Checking…';
+    const info = await window.xavaniDesktop.checkForUpdates();
+    out.textContent = info.error ? info.error
+      : info.updateAvailable ? `Update available: v${info.latest}` : `Up to date (v${info.current})`;
+    renderUpdateBadge(info);
+  });
+
+  // --- About ---
+  const ac = settingsCard('About', '');
+  ac.appendChild(cardEl(`Xavani Desktop`, `engine ${s.engine_version || '?'} · python ${s.python || '?'}`, null, (() => {
+    const b = document.createElement('button');
+    b.className = 'btn ghost sm';
+    b.textContent = 'Reveal data folder';
+    b.addEventListener('click', () => s.xavani_home && window.xavaniDesktop.revealPath(s.xavani_home));
+    return b;
+  })()));
+  box.appendChild(ac);
 }
 
 /* ---------------- console (full CLI via PTY) ---------------- */

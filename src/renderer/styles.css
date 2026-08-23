@@ -761,3 +761,17 @@ body.dock-resizing #dock-webview { pointer-events: none; }
 .wiz-row { display: flex; align-items: center; gap: 8px; padding: 7px 0; font-size: 13px; color: var(--text-secondary); }
 .wiz-ok { color: #10b981; }
 .wiz-bad { color: #eb5757; }
+
+/* ---------- settings rows + update badge ---------- */
+
+.set-row { display: flex; align-items: center; gap: 10px; padding: 7px 0; font-size: 13px; color: var(--text-secondary); flex-wrap: wrap; }
+.set-row select, .set-row input {
+  background: #0b0c0f; color: var(--text-primary);
+  border: 1px solid var(--border-subtle); border-radius: 6px; padding: 5px 8px; font-size: 12.5px;
+}
+#update-badge {
+  background: rgba(113,112,255,0.15); color: #a5a4ff;
+  border: 1px solid rgba(113,112,255,0.45); border-radius: 20px;
+  font-size: 10px; padding: 1px 8px; cursor: pointer; margin-left: 2px;
+}
+#update-badge:hover { background: rgba(113,112,255,0.28); }
