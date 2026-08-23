@@ -1,4 +1,4 @@
-# Xavani Desktop v0.5.0 — Full parity + first-run setup + settings + voice
+# Xavani Desktop v0.2.0 — Full parity + first-run setup + settings + voice
 
 Shipped together with **xavani-agent v0.2.0** ("The Big Bang"). The desktop app now
 surfaces every capability the 0.2.0 engine ships.
@@ -29,7 +29,7 @@ surfaces every capability the 0.2.0 engine ships.
 
 ## Downloads
 
-- macOS (Apple Silicon): `Xavani-0.5.0-macos-arm64.dmg`
-- Windows x64: `Xavani-0.5.0-windows-x64-setup.exe` + portable zip
+- macOS (Apple Silicon): `Xavani-0.2.0-macos-arm64.dmg`
+- Windows x64: `Xavani-0.2.0-windows-x64-setup.exe` + portable zip
 
 Both builds bundle the **xavani-agent v0.2.0** engine.
