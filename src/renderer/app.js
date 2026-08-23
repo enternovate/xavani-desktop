@@ -38,6 +38,60 @@ function toast(msg, ms = 4000) {
   el._timer = setTimeout(() => el.classList.remove('show'), ms);
 }
 
+/* ---------------- notification stack ---------------- */
+
+function notify(message, { kind = 'info', onClick = null, ms = 6000 } = {}) {
+  const stack = document.querySelector('#notif-stack');
+  if (!stack) return;
+  const note = document.createElement('div');
+  note.className = `notif notif-${kind}`;
+  note.textContent = message;
+  if (onClick) {
+    note.style.cursor = 'pointer';
+    note.addEventListener('click', () => { onClick(); dismiss(); });
+  }
+  stack.appendChild(note);
+  requestAnimationFrame(() => note.classList.add('show'));
+  function dismiss() {
+    note.classList.remove('show');
+    setTimeout(() => note.remove(), 300);
+  }
+  setTimeout(dismiss, ms);
+}
+
+/* ---------------- ambient activity pill ---------------- */
+
+const ACTIVITY_POLL_MS = 20000;
+
+async function pollActivity() {
+  try {
+    const res = await dapi('/desktop/api/activity');
+    const d = await res.json();
+    renderActivity(d.activities || []);
+  } catch {
+    renderActivity([]);
+  }
+}
+
+function renderActivity(activities) {
+  const pill = document.querySelector('#activity-pill');
+  if (!pill) return;
+  if (!activities.length) {
+    pill.classList.add('hidden');
+    pill.textContent = '';
+    return;
+  }
+  const first = activities[0];
+  const extra = activities.length > 1 ? ` +${activities.length - 1} more` : '';
+  pill.innerHTML = `<span class="activity-dot"></span>${escapeHtml(first.label)}${escapeHtml(extra)}`;
+  pill.classList.remove('hidden');
+}
+
+function startActivityPolling() {
+  pollActivity();
+  setInterval(pollActivity, ACTIVITY_POLL_MS);
+}
+
 /* ---------------- boot ---------------- */
 
 window.__errs = window.__errs || [];
@@ -102,6 +156,18 @@ async function init() {
   setupDock();
   setupStudio();
   wireComposerClean();
+  startActivityPolling();
+
+  window.xavaniDesktop.checkForUpdates().then((info) => {
+    if (info && info.updateAvailable && !localStorage.getItem('xz-update-notified')) {
+      localStorage.setItem('xz-update-notified', info.latest);
+      notify(`Update available: Xavani ${info.latest}`, {
+        kind: 'update',
+        onClick: () => info.url && window.xavaniDesktop.openExternal(info.url),
+        ms: 10000,
+      });
+    }
+  }).catch(() => {});
 
   $('#send').addEventListener('click', onSend);
   $('#stop').addEventListener('click', onStop);
