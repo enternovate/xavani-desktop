@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, session } = require('electron');
 const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
@@ -188,6 +188,11 @@ async function checkForUpdates() {
 }
 
 function createWindow() {
+  // Voice input: grant mic only to our own file:// origin.
+  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
+    cb(permission === 'media');
+  });
+
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,

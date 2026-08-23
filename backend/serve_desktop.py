@@ -17,7 +17,6 @@ import asyncio
 import json
 import os
 import re
-import shlex
 import shutil
 import signal
 import socket
@@ -433,8 +432,8 @@ def build_desktop_app(api_port: int):
         env_path = _xavani_home() / ".env"
         lines = []
         if env_path.exists():
-            lines = [l for l in env_path.read_text(encoding="utf-8").splitlines()
-                     if l.strip() and not l.strip().startswith(f"{key}=")]
+            lines = [ln for ln in env_path.read_text(encoding="utf-8").splitlines()
+                     if ln.strip() and not ln.strip().startswith(f"{key}=")]
         lines.append(f"{key}={value}")
         env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -654,6 +653,14 @@ def build_desktop_app(api_port: int):
         "codex": {"home": Path.home() / ".codex", "globs": ["sessions/**/*.jsonl", "*.jsonl"]},
         "hermes": {"home": Path.home() / ".hermes", "globs": ["sessions/**/*.jsonl", "terminal-sessions/**/*.jsonl"]},
         "cursor": {"home": Path.home() / "Library" / "Application Support" / "Cursor", "globs": []},
+    }
+
+    # Human labels for imported-session titles (referenced by label_for below).
+    MIG_LABELS = {
+        "claude_code": "Claude Code",
+        "codex": "Codex",
+        "hermes": "Hermes",
+        "cursor": "Cursor",
     }
 
     def _memory_files(home: Path) -> list[str]:
@@ -1053,6 +1060,69 @@ def build_desktop_app(api_port: int):
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
+
+    # ---------------- voice transcription ----------------
+
+    def _read_env_key(name: str) -> str:
+        env_path = _xavani_home() / ".env"
+        if env_path.exists():
+            for line in env_path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.startswith(f"{name}="):
+                    return line.split("=", 1)[1].strip()
+        return os.environ.get(name, "")
+
+    @routes.post("/desktop/api/transcribe")
+    async def transcribe(request: "web.Request") -> "web.Response":
+        try:
+            reader = await request.multipart()
+            field = await reader.next() if reader else None
+            if field is None or field.name != "audio":
+                return web.json_response({"error": "audio multipart part required"}, status=400)
+            blob = b""
+            while not field.at_eof():
+                blob += await field.read_chunk()
+        except Exception as exc:
+            return web.json_response({"error": f"bad upload: {exc}"}, status=400)
+        if not blob:
+            return web.json_response({"error": "empty audio"}, status=400)
+        if len(blob) > 25 * 1024 * 1024:
+            return web.json_response({"error": "audio over 25MB"}, status=413)
+
+        openai_key = _read_env_key("OPENAI_API_KEY")
+        groq_key = _read_env_key("GROQ_API_KEY")
+        use_groq = bool(groq_key) and not openai_key
+        key = groq_key if use_groq else openai_key
+        if not key:
+            return web.json_response(
+                {"error": "no OPENAI_API_KEY or GROQ_API_KEY configured — add one in Settings or ~/.xavani/.env"},
+                status=400)
+
+        url = ("https://api.groq.com/openai/v1/audio/transcriptions" if use_groq
+               else "https://api.openai.com/v1/audio/transcriptions")
+        model = "whisper-large-v3" if use_groq else "gpt-4o-transcribe"
+
+        import aiohttp
+
+        form = aiohttp.FormData()
+        form.add_field("file", blob, filename="speech.webm", content_type="audio/webm")
+        form.add_field("model", model)
+        try:
+            async with aiohttp.ClientSession() as http:
+                resp = await http.post(
+                    url, data=form,
+                    headers={"Authorization": f"Bearer {key}"},
+                    timeout=aiohttp.ClientTimeout(total=120),
+                )
+                out = await resp.json(content_type=None)
+        except Exception as exc:
+            return web.json_response({"error": f"transcription request failed: {exc}"}, status=502)
+        if resp.status != 200:
+            msg = ""
+            if isinstance(out, dict):
+                err = out.get("error")
+                msg = err.get("message", "") if isinstance(err, dict) else str(err)
+            return web.json_response({"error": msg or f"transcription failed ({resp.status})"}, status=502)
+        return web.json_response({"text": (out or {}).get("text", "")})
 
     @routes.get("/desktop/api/fs/find")
     async def fs_find(request: "web.Request") -> "web.Response":
