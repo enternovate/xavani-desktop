@@ -716,6 +716,40 @@ def build_desktop_app(api_port: int):
         except Exception as exc:
             return web.json_response({"items": [], "error": str(exc)})
 
+    @routes.get("/desktop/api/activity")
+    async def activity_get(_request: "web.Request") -> "web.Response":
+        activities = []
+        try:
+            from xavani_cli import loop_runner
+
+            for spec in loop_runner.list_loops():
+                if spec.get("status") != "active":
+                    continue
+                passes = len(spec.get("passes", []))
+                activities.append({
+                    "kind": "loop",
+                    "label": f"Loop running: {str(spec.get('prompt', ''))[:60]}",
+                    "detail": f"{passes} pass(es)",
+                })
+        except Exception:
+            pass
+        try:
+            from xavani_wisdom.outstanding import OutstandingLedger
+
+            open_goals = [
+                e for e in OutstandingLedger(_xavani_home() / "outstanding.jsonl").items()
+                if e.get("kind") == "goal"
+            ]
+            for goal in open_goals[:3]:
+                activities.append({
+                    "kind": "goal",
+                    "label": f"Open goal: {str(goal.get('text', ''))[:60]}",
+                    "detail": f"#{goal.get('n')}",
+                })
+        except Exception:
+            pass
+        return web.json_response({"activities": activities})
+
     # ---------------- skills hub (GitHub-backed) ----------------
 
     @routes.get("/desktop/api/skills/hub/search")

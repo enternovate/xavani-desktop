@@ -95,6 +95,7 @@
           <button class="chip chip-btn" id="chip-fast" title="Fast mode — priority processing where the provider supports it">Fast: off</button>
         </div>
         <div class="topbar-right">
+          <span id="activity-pill" class="activity-pill hidden" title="Agent activity"></span>
           <button class="chip chip-btn" id="dock-toggle" title="Toggle preview dock">
             <svg width="10" height="10" viewBox="0 0 12 12" fill="none" style="vertical-align:-1px"><rect x="1" y="1.5" width="10" height="9" rx="1.5" stroke="currentColor"/><path d="M7.5 1.5v9" stroke="currentColor"/></svg>
             Preview
@@ -247,6 +248,7 @@
     </div>
   </div>
 
+  <div id="notif-stack"></div>
   <script src="vendor/marked.min.js"></script>
   <script src="vendor/purify.min.js"></script>
   <script src="vendor/xterm.js"></script>

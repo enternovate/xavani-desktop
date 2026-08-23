@@ -868,3 +868,43 @@ body.dock-resizing #dock-webview { pointer-events: none; }
 }
 .todo-item:hover .todo-del { opacity: 1; }
 .todo-del:hover { color: var(--red); }
+
+/* ---------------- notification stack ---------------- */
+
+#notif-stack {
+  position: fixed; top: 14px; right: 16px; z-index: 1000;
+  display: flex; flex-direction: column; gap: 8px; pointer-events: none;
+}
+.notif {
+  pointer-events: auto;
+  background: var(--bg-surface); color: var(--text-primary);
+  border: 1px solid var(--border-standard); border-left: 3px solid var(--accent);
+  border-radius: 9px; padding: 10px 14px; font-size: 12.5px;
+  box-shadow: 0 6px 22px rgba(0,0,0,0.45);
+  opacity: 0; transform: translateY(-8px);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  max-width: 340px;
+}
+.notif.show { opacity: 1; transform: translateY(0); }
+.notif-update { border-left-color: var(--green); }
+.notif-error { border-left-color: var(--red); }
+
+/* ---------------- activity pill ---------------- */
+
+.activity-pill {
+  display: inline-flex; align-items: center; gap: 7px;
+  background: rgba(94,106,210,0.14); color: var(--text-secondary);
+  border: 1px solid rgba(113,112,255,0.35); border-radius: 20px;
+  font-size: 11px; padding: 4px 12px; margin-right: 8px;
+  max-width: 380px; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis;
+}
+.activity-pill.hidden { display: none; }
+.activity-dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--accent-bright);
+  animation: pill-pulse 1.6s ease-in-out infinite; flex-shrink: 0;
+}
+@keyframes pill-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.82); }
+}
