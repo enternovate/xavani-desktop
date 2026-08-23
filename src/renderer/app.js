@@ -1637,6 +1637,9 @@ const VISUAL_EDIT_SCRIPT = `
     + '<div class="xrow"><button data-a="mt-">mar&minus;</button><button data-a="mt+">mar+</button><button data-a="w-">w&minus;</button><button data-a="w+">w+</button><button data-a="gap+">gap+</button><button data-a="gap-">gap&minus;</button></div>'
     + '<div class="xsec">Animate</div>'
     + '<div class="xrow">' + animBtns + '</div>'
+    + '<div class="xsec" id="__xd_msec" style="display:none">Media</div>'
+    + '<div class="xrow" id="__xd_mrow" style="display:none"><button data-a="mrot">rotate 90&deg;</button><button data-a="mflip">flip H</button><button data-a="mgray">gray</button><button data-a="mblur">blur</button><button data-a="mbright">bright+</button></div>'
+    + '<div class="xrow" id="__xd_srow" style="display:none"><label>SVG fill</label><input type="color" id="__xd_sfill"><label>stroke</label><input type="color" id="__xd_sstroke"></div>'
     + '<div class="xsec">Apply</div>'
     + '<div class="xrow"><button data-a="undo">undo last</button><button data-a="clear">clear all</button><button data-a="send" style="background:rgba(113,112,255,.4);border-color:#7170ff;">send to agent</button></div>';
   document.body.appendChild(panel);
@@ -1687,12 +1690,22 @@ const VISUAL_EDIT_SCRIPT = `
     return '#' + m.slice(1).map(function(x){ return ('0' + parseInt(x, 10).toString(16)).slice(-2); }).join('');
   }
 
+  function isRaster(el){ return el && el.tagName === 'IMG'; }
+  function isSvgNode(el){ return !!(el && (el instanceof SVGElement || (el.closest && el.closest('svg')))); }
+  function syncMediaSection(){
+    var media = sel && (isRaster(sel) || isSvgNode(sel));
+    panel.querySelector('#__xd_msec').style.display = media ? '' : 'none';
+    panel.querySelector('#__xd_mrow').style.display = (media && isRaster(sel)) ? '' : 'none';
+    panel.querySelector('#__xd_srow').style.display = (media && isSvgNode(sel)) ? '' : 'none';
+  }
+
   function select(el){
     if (sel) sel.removeAttribute('__xd-sel');
     sel = el;
     sel.setAttribute('__xd-sel', '');
     label.textContent = tagOf(sel);
     syncColourInputs();
+    syncMediaSection();
   }
 
   document.addEventListener('mouseover', function(e){
@@ -1804,13 +1817,58 @@ const VISUAL_EDIT_SCRIPT = `
       record(sel, 'animation', name);
       return;
     }
+    if (a === 'mrot' || a === 'mflip' || a === 'mgray' || a === 'mblur' || a === 'mbright'){
+      processRaster(a);
+      return;
+    }
   });
+
+  function processRaster(kind){
+    if (!isRaster(sel)) { label.textContent = 'select an image first'; return; }
+    var w = sel.naturalWidth, h = sel.naturalHeight;
+    if (!w || !h) { label.textContent = 'image not fully loaded'; return; }
+    try {
+      var c = document.createElement('canvas');
+      var rot = kind === 'mrot';
+      c.width = rot ? h : w;
+      c.height = rot ? w : h;
+      var ctx = c.getContext('2d');
+      ctx.filter = kind === 'mgray' ? 'grayscale(1)'
+        : kind === 'mblur' ? 'blur(3px)'
+        : kind === 'mbright' ? 'brightness(1.3)' : 'none';
+      ctx.save();
+      if (rot) { ctx.translate(h, 0); ctx.rotate(Math.PI / 2); }
+      if (kind === 'mflip') { ctx.translate(w, 0); ctx.scale(-1, 1); }
+      ctx.drawImage(sel, 0, 0);
+      ctx.restore();
+      var url = c.toDataURL('image/png');
+      var origSrc = sel.getAttribute('src') || '';
+      sel.src = url;
+      recordOp(sel, { op: 'image', kind: kind.replace(/^m/, ''), src: origSrc, dataUrl: url });
+    } catch (err) {
+      label.textContent = 'image edit blocked (' + (String(err).slice(0, 40)) + ')';
+    }
+  }
 
   panel.querySelector('#__xd_c1').addEventListener('input', function(e){
     if (sel) { sel.style.color = e.target.value; record(sel, 'color', e.target.value); }
   });
   panel.querySelector('#__xd_c2').addEventListener('input', function(e){
     if (sel) { sel.style.backgroundColor = e.target.value; record(sel, 'backgroundColor', e.target.value); }
+  });
+  panel.querySelector('#__xd_sfill').addEventListener('input', function(e){
+    if (sel && isSvgNode(sel)) {
+      sel.setAttribute('fill', e.target.value);
+      sel.style.fill = e.target.value;
+      recordOp(sel, { op: 'svg-attr', attr: 'fill', value: e.target.value });
+    }
+  });
+  panel.querySelector('#__xd_sstroke').addEventListener('input', function(e){
+    if (sel && isSvgNode(sel)) {
+      sel.setAttribute('stroke', e.target.value);
+      sel.style.stroke = e.target.value;
+      recordOp(sel, { op: 'svg-attr', attr: 'stroke', value: e.target.value });
+    }
   });
 
   setInterval(function(){
@@ -1840,14 +1898,42 @@ function pollDockEdits() {
 }
 setInterval(pollDockEdits, 1200);
 
-function sendEditsToAgent(edits) {
+async function sendEditsToAgent(edits) {
   if (!edits.length) return;
-  const lines = edits.map((e) => {
-    if (e.op === 'delete') return `- \`${e.target}\` → DELETE this element entirely`;
-    if (e.op === 'move') return `- \`${e.target}\` → offset it with \`transform: ${e.value}\``;
-    return `- \`${e.target}\` → set \`${e.prop}: ${e.value}\``;
-  }).join('\n');
-  const msg = `I adjusted the running preview visually. Apply these exact changes to the project's source code:\n${lines}\nUpdate the relevant source files/styles so the change is permanent, then confirm.`;
+  const lines = [];
+  for (const e of edits) {
+    if (e.op === 'delete') { lines.push(`- \`${e.target}\` → DELETE this element entirely`); continue; }
+    if (e.op === 'move') { lines.push(`- \`${e.target}\` → offset it with \`transform: ${e.value}\``); continue; }
+    if (e.op === 'svg-attr') {
+      lines.push(`- SVG element \`${e.target}\` → set attribute \`${e.attr}: ${e.value}\``);
+      continue;
+    }
+    if (e.op === 'image' && e.dataUrl) {
+      const base = decodeURIComponent(String(e.src || '').split('/').pop().split('?')[0]);
+      const ext = (base.match(/\.(png|jpe?g|webp|gif|svg)$/i) || [])[1];
+      let written = null;
+      if (base && ext) {
+        try {
+          const found = await dapi(`/desktop/api/fs/find?name=${encodeURIComponent(base)}`).then((r) => r.json());
+          if (found.path) {
+            const res = await dapi('/desktop/api/fs/write-b64', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: found.path, data_b64: e.dataUrl.split(',').pop() }),
+            });
+            const d = await res.json();
+            if (d.ok) written = d.path;
+          }
+        } catch {}
+      }
+      lines.push(written
+        ? `- image \`${e.target}\` → I already overwrote the file \`${written}\` on disk with a ${e.kind} version (a .bak backup sits next to it). Update markup/styles only if dimensions or references changed.`
+        : `- image \`${e.target}\` → replace the source asset with a ${e.kind} processed version${ext ? '' : ' (save it as a new PNG in the project and update the reference)'}`);
+      continue;
+    }
+    lines.push(`- \`${e.target}\` → set \`${e.prop}: ${e.value}\``);
+  }
+  const msg = `I adjusted the running preview visually. Apply these exact changes to the project's source code:\n${lines.join('\n')}\nUpdate the relevant source files/styles so the change is permanent, then confirm.`;
   switchView('chat');
   const input = $('#input');
   input.value = msg;
