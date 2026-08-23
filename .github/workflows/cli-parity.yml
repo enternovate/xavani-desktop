@@ -1,0 +1,36 @@
+name: cli-parity
+
+# The desktop app must always match the CLI. When the engine's command
+# registry drifts from the committed snapshot, this fails loudly with the
+# exact commands that need desktop coverage.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # every Monday 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  parity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with:
+          repository: enternovate/xavani-agent
+          path: engine-src
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install engine runtime deps (registry import only)
+        run: pip install pyyaml ruamel.yaml aiohttp requests psutil || true
+
+      - name: Parity check
+        run: bash scripts/check_parity.sh "$GITHUB_WORKSPACE/engine-src"
