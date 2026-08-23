@@ -850,6 +850,80 @@ def build_desktop_app(api_port: int):
                 n += sum(1 for f in home.glob(g) if f.is_file())
         return n
 
+    @routes.post("/desktop/api/preview/brief")
+    async def preview_brief(request: "web.Request") -> "web.Response":
+        """Map preview change-set ops to workspace files and build an edit brief."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        ops = body.get("ops")
+        if not isinstance(ops, list) or not ops:
+            return web.json_response({"error": "ops list required"}, status=400)
+        root_value = _ws_state_path_root()
+        if not root_value:
+            root_value = str(Path.home())
+        root = Path(str(root_value)).expanduser()
+        brief_lines: list[str] = []
+        unresolved: list[dict] = []
+        searched = 0
+        for op in ops[:40]:
+            selector = str(op.get("selector", "")).strip()
+            prop = str(op.get("property", ""))
+            new_value = str(op.get("new_value", ""))
+            note = str(op.get("note", ""))
+            if not selector:
+                unresolved.append(op)
+                continue
+            # Extract a searchable class token from simple css selectors.
+            token = ""
+            for part in selector.replace(">", " ").split():
+                if part.startswith("."):
+                    token = part[1:]
+                    break
+            match_file = None
+            match_line = 0
+            if token:
+                try:
+                    import subprocess as _sp
+
+                    proc_ = _sp.run(
+                        ["grep", "-rn", "--include=*.css", "--include=*.scss",
+                         "--include=*.html", "-l", token, str(root)],
+                        capture_output=True, text=True, timeout=20,
+                    )
+                    files = [f for f in proc_.stdout.strip().splitlines() if f][:5]
+                    searched += len(files)
+                    if files:
+                        match_file = files[0]
+                        proc2 = _sp.run(
+                            ["grep", "-n", token, files[0]],
+                            capture_output=True, text=True, timeout=10,
+                        )
+                        if proc2.stdout.splitlines():
+                            first = proc2.stdout.splitlines()[0]
+                            try:
+                                match_line = int(first.split(":", 1)[0])
+                            except ValueError:
+                                match_line = 0
+                except Exception:
+                    match_file = None
+            if match_file:
+                brief_lines.append(
+                    f"- File {match_file}{':' + str(match_line) if match_line else ''}: "
+                    f"change '{prop}' of element matching '{selector}' to: {new_value}"
+                    + (f" (context: {note})" if note else "")
+                )
+            else:
+                op["reason"] = f"no source file references '{selector}'"
+                unresolved.append(op)
+        return web.json_response({
+            "ok": True,
+            "brief": "\n".join(brief_lines),
+            "resolved": len(brief_lines),
+            "unresolved": unresolved,
+        })
+
     @routes.post("/desktop/api/migrate/folder")
     async def migrate_folder(request: "web.Request") -> "web.Response":
         """Scan an arbitrary folder for jsonl transcripts and md memory files."""
