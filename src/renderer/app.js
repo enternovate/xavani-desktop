@@ -92,6 +92,35 @@ function startActivityPolling() {
   setInterval(pollActivity, ACTIVITY_POLL_MS);
 }
 
+/* ---------------- outstanding-work reminders ---------------- */
+
+const OUTSTANDING_POLL_MS = 30 * 60 * 1000;
+
+async function checkOutstanding() {
+  try {
+    const res = await dapi('/desktop/api/outstanding');
+    const d = await res.json();
+    const items = d.items || [];
+    if (!items.length) return;
+    notify(
+      `You have ${items.length} outstanding item(s) from earlier sessions.`,
+      {
+        kind: 'info',
+        ms: 12000,
+        onClick: () => {
+          if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+          document.querySelector('#tab-todo').click();
+        },
+      },
+    );
+  } catch {}
+}
+
+function startOutstandingReminders() {
+  checkOutstanding();
+  setInterval(checkOutstanding, OUTSTANDING_POLL_MS);
+}
+
 /* ---------------- boot ---------------- */
 
 window.__errs = window.__errs || [];
@@ -157,6 +186,7 @@ async function init() {
   setupStudio();
   wireComposerClean();
   startActivityPolling();
+  startOutstandingReminders();
 
   window.xavaniDesktop.checkForUpdates().then((info) => {
     if (info && info.updateAvailable && !localStorage.getItem('xz-update-notified')) {
