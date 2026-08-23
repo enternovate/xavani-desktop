@@ -678,23 +678,56 @@ async function loadStatus() {
 
 /* ---------------- settings view ---------------- */
 
-function settingsCard(title, desc) {
+function settingsCard(title, desc, group) {
   const card = document.createElement('div');
   card.className = 'card set-card';
+  if (group) card.dataset.group = group;
   card.innerHTML = `<div class="c-body"><div class="c-name">${escapeHtml(title)}</div>
     ${desc ? `<div class="c-desc">${escapeHtml(desc)}</div>` : ''}</div>`;
   return card;
 }
 
+const SETTINGS_GROUPS = ['all', 'general', 'models', 'tools'];
+
+function renderSettingsGroups(active) {
+  const strip = $('#settings-groups');
+  if (!strip) return;
+  strip.innerHTML = '';
+  const labels = { all: 'All', general: 'General', models: 'Models', tools: 'Tools' };
+  for (const g of SETTINGS_GROUPS) {
+    const b = document.createElement('button');
+    b.className = `chip chip-btn set-group${g === active ? ' on' : ''}`;
+    b.textContent = labels[g];
+    b.addEventListener('click', () => applySettingsGroup(g));
+    strip.appendChild(b);
+  }
+}
+
+function applySettingsGroup(group) {
+  const panel = $('#settings-panel');
+  SETTINGS_GROUPS.filter((g) => g !== 'all').forEach((g) => {
+    panel.classList.toggle(`show-${g}`, group === 'all' || group === g);
+  });
+  panel.classList.toggle('grouped', group !== 'all');
+  renderSettingsGroups(group);
+}
+
 async function loadSettings() {
   const box = $('#settings-panel');
-  box.innerHTML = '<div class="empty">Loading…</div>';
   box.innerHTML = '<div class="panel-title">Settings</div><div class="panel-desc">Everything is stored locally in ~/.xavani.</div>';
+  const strip = document.createElement('div');
+  strip.id = 'settings-groups';
+  box.appendChild(strip);
+  const gen = document.createElement('div');
+  const mod = document.createElement('div');
+  const tol = document.createElement('div');
+  [gen, mod, tol].forEach((c) => { c.className = 'set-cluster'; box.appendChild(c); });
+  applySettingsGroup('all');
 
   // --- Appearance ---
   const skin = await dapi('/desktop/api/skins').then((r) => r.json()).catch(() => null);
   if (skin) {
-    const c = settingsCard('Appearance', 'Engine skin used by the console and CLI surfaces.');
+    const c = settingsCard('Appearance', 'Engine skin used by the console and CLI surfaces.', 'general');
     const row = document.createElement('div');
     row.className = 'set-row';
     row.innerHTML = `<select id="set-skin">${(skin.skins || []).map((s) => `<option value="${s.name}"${s.name === skin.active ? ' selected' : ''}>${s.name}</option>`).join('')}</select>
@@ -714,7 +747,7 @@ async function loadSettings() {
 
   // --- Model & provider ---
   const s = state.status || {};
-  const mc = settingsCard('Model & provider', 'Current model for new chats.');
+  const mc = settingsCard('Model & provider', 'Current model for new chats.', 'models');
   mc.appendChild(cardEl(s.model || 'not configured', s.provider ? `provider: ${s.provider}` : 'open the picker to choose one', null, (() => {
     const b = document.createElement('button');
     b.className = 'btn ghost sm';
@@ -722,11 +755,11 @@ async function loadSettings() {
     b.addEventListener('click', () => { switchView('chat'); openModelModal(null); });
     return b;
   })()));
-  box.appendChild(mc);
+  mod.appendChild(mc);
 
   // --- Effort & fast mode ---
   await loadPrefs();
-  const pc = settingsCard('Reasoning effort & fast mode', 'Applies to new runs. Same controls as the topbar chips.');
+  const pc = settingsCard('Reasoning effort & fast mode', 'Applies to new runs. Same controls as the topbar chips.', 'models');
   const prow = document.createElement('div');
   prow.className = 'set-row';
   prow.innerHTML = `<select id="set-effort">${['none', 'minimal', 'low', 'medium', 'high', 'xhigh'].map((e) =>
@@ -734,13 +767,13 @@ async function loadSettings() {
     <label class="wiz-check"><input type="checkbox" id="set-fast" ${state.prefs.fast_mode ? 'checked' : ''}> Fast mode</label>
     <button class="btn primary sm" id="set-prefs-save">Save</button>`;
   pc.appendChild(prow);
-  box.appendChild(pc);
+  mod.appendChild(pc);
   pc.querySelector('#set-prefs-save').addEventListener('click', () => {
     setPrefs({ effort: pc.querySelector('#set-effort').value, fast_mode: pc.querySelector('#set-fast').checked });
   });
 
   // --- Tools & toolsets ---
-  const tc = settingsCard('Tools & toolsets', 'What the agent may do in a session.');
+  const tc = settingsCard('Tools & toolsets', 'What the agent may do in a session.', 'tools');
   try {
     const { toolsets } = await dapi('/desktop/api/tools').then((r) => r.json());
     for (const t of (toolsets || [])) {
@@ -760,7 +793,7 @@ async function loadSettings() {
   } catch {
     tc.insertAdjacentHTML('beforeend', '<span class="dim">Could not load toolsets.</span>');
   }
-  box.appendChild(tc);
+  tol.appendChild(tc);
 
   // --- MCP servers ---
   let mcpServers = {};
@@ -768,7 +801,7 @@ async function loadSettings() {
     const st = await dapi('/desktop/api/settings').then((r) => r.json());
     mcpServers = st.mcp_servers || {};
   } catch {}
-  const mcc = settingsCard('MCP servers', 'Stdio/HTTP tools the engine connects to at startup.');
+  const mcc = settingsCard('MCP servers', 'Stdio/HTTP tools the engine connects to at startup.', 'tools');
   for (const [name, cfgv] of Object.entries(mcpServers)) {
     const row = document.createElement('div');
     row.className = 'set-row';
@@ -783,7 +816,7 @@ async function loadSettings() {
     <input id="mcp-cmd" placeholder="/path/to/server --args" class="mono">
     <button class="btn ghost sm" id="mcp-add">Add</button>`;
   mcc.appendChild(addRow);
-  box.appendChild(mcc);
+  tol.appendChild(mcc);
 
   const saveMcp = async (servers) => {
     const res = await dapi('/desktop/api/settings', {
@@ -812,25 +845,25 @@ async function loadSettings() {
   // --- Profiles ---
   const prof = await dapi('/desktop/api/profiles').then((r) => r.json()).catch(() => null);
   if (prof) {
-    const pcc = settingsCard('Profiles', 'Isolated Xavani homes. Switch with `/profile` in the console — the app restarts into that profile.');
+    const pcc = settingsCard('Profiles', 'Isolated Xavani homes. Switch with `/profile` in the console — the app restarts into that profile.', 'tools');
     for (const p of (prof.profiles || [])) {
       const row = document.createElement('div');
       row.className = 'set-row';
       row.innerHTML = `<span>${escapeHtml(p.name)}</span>${p.name === prof.active ? '<span class="wiz-ok">active</span>' : ''}`;
       pcc.appendChild(row);
     }
-    box.appendChild(pcc);
+    tol.appendChild(pcc);
   }
 
   // --- Display zoom ---
-  const dc = settingsCard('Display', 'Interface zoom level.');
+  const dc = settingsCard('Display', 'Interface zoom level.', 'general');
   const zrow = document.createElement('div');
   zrow.className = 'set-row';
   const zoom = Number(localStorage.getItem('xz-zoom') || '1');
   zrow.innerHTML = `<select id="set-zoom">${[0.85, 0.9, 1, 1.1, 1.25].map((z) =>
     `<option value="${z}"${z === zoom ? ' selected' : ''}>${Math.round(z * 100)}%</option>`).join('')}</select>`;
   dc.appendChild(zrow);
-  box.appendChild(dc);
+  gen.appendChild(dc);
   dc.querySelector('#set-zoom').addEventListener('change', async (ev) => {
     const z = Number(ev.target.value);
     localStorage.setItem('xz-zoom', String(z));
@@ -838,12 +871,12 @@ async function loadSettings() {
   });
 
   // --- Updates ---
-  const uc = settingsCard('Updates', 'Check GitHub releases for new desktop builds.');
+  const uc = settingsCard('Updates', 'Check GitHub releases for new desktop builds.', 'general');
   const urow = document.createElement('div');
   urow.className = 'set-row';
   urow.innerHTML = `<button class="btn ghost sm" id="upd-check">Check now</button> <span id="upd-out" class="dim"></span>`;
   uc.appendChild(urow);
-  box.appendChild(uc);
+  gen.appendChild(uc);
   uc.querySelector('#upd-check').addEventListener('click', async () => {
     const out = uc.querySelector('#upd-out');
     out.textContent = 'Checking…';
@@ -854,7 +887,7 @@ async function loadSettings() {
   });
 
   // --- About ---
-  const ac = settingsCard('About', '');
+  const ac = settingsCard('About', '', 'general');
   ac.appendChild(cardEl(`Xavani Desktop`, `engine ${s.engine_version || '?'} · python ${s.python || '?'}`, null, (() => {
     const b = document.createElement('button');
     b.className = 'btn ghost sm';
@@ -862,7 +895,7 @@ async function loadSettings() {
     b.addEventListener('click', () => s.xavani_home && window.xavaniDesktop.revealPath(s.xavani_home));
     return b;
   })()));
-  box.appendChild(ac);
+  gen.appendChild(ac);
 }
 
 /* ---------------- agent ops (loops · eval · diff · permissions) ---------------- */
