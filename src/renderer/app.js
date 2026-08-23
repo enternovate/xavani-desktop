@@ -2501,7 +2501,27 @@ async function sendEditsToAgent(edits) {
     }
     lines.push(`- \`${e.target}\` → set \`${e.prop}: ${e.value}\``);
   }
-  const msg = `I adjusted the running preview visually. Apply these exact changes to the project's source code:\n${lines.join('\n')}\nUpdate the relevant source files/styles so the change is permanent, then confirm.`;
+  // Try the backend brief route: maps ops to real workspace files.
+  let mapped = null;
+  try {
+    const ops = edits.map((e) => ({
+      selector: e.target,
+      property: e.prop || e.op || (e.attr ? `attr:${e.attr}` : ''),
+      new_value: e.value || '',
+      note: e.note || '',
+    }));
+    const res = await dapi('/desktop/api/preview/brief', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ops }),
+    });
+    const d = await res.json();
+    if (d.ok && d.resolved > 0) {
+      const un = d.unresolved.length
+        ? `\nUnmapped (resolve manually): ${d.unresolved.map((u) => u.selector).join(', ')}` : '';
+      mapped = `I adjusted the running preview visually. Apply these exact changes so they lock in permanently:\n${d.brief}${un}\nStage each edit through the write-approval flow (/diff on, then /apply), then confirm what changed.`;
+    }
+  } catch {}
+  const msg = mapped || `I adjusted the running preview visually. Apply these exact changes to the project's source code:\n${lines.join('\n')}\nUpdate the relevant source files/styles so the change is permanent, then confirm.`;
   switchView('chat');
   const input = $('#input');
   input.value = msg;
