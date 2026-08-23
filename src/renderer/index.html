@@ -176,6 +176,10 @@
     <aside id="dock">
       <div id="dock-resize" title="Drag to resize — double-click to reset"></div>
       <div class="dock-bar">
+        <div class="dock-tabs-head">
+          <button class="dock-tab active" id="tab-preview" data-docktab="preview">Preview</button>
+          <button class="dock-tab" id="tab-todo" data-docktab="todo">To-Do</button>
+        </div>
         <input id="dock-url" class="mono" placeholder="http://localhost:3000" value="http://localhost:3000">
         <button id="dock-go" class="btn ghost sm">Go</button>
         <button id="dock-edit" class="btn ghost sm" title="Visual edit: click elements, drag spacing, then send changes to the agent">Visual edit</button>
@@ -184,6 +188,14 @@
       <div id="dock-tabs"></div>
       <div class="dock-body">
         <webview id="dock-webview" src="http://localhost:3000" allowpopups></webview>
+        <div id="dock-todoview" class="hidden">
+          <div class="todo-addrow">
+            <input id="todo-input" placeholder="Add a task…" spellcheck="false">
+            <button id="todo-add" class="btn primary sm">Add</button>
+          </div>
+          <div id="todo-hint" class="todo-hint">Drag to prioritise. Top item = highest priority.</div>
+          <div id="todo-list"></div>
+        </div>
         <div id="dock-fileview" class="hidden">
           <div id="dock-filepath" class="mono"></div>
           <div id="dock-filescroll">

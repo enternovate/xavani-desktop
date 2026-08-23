@@ -800,3 +800,71 @@ body.dock-resizing #dock-webview { pointer-events: none; }
   0%, 100% { box-shadow: 0 0 0 0 rgba(235,87,87,0.35); }
   50% { box-shadow: 0 0 0 5px rgba(235,87,87,0.12); }
 }
+
+/* ---------------- dock header tabs (Preview | To-Do) ---------------- */
+
+.dock-tabs-head {
+  display: flex; gap: 2px; margin-right: 6px; flex-shrink: 0;
+}
+.dock-tab-head-btn { all: unset; }
+.dock-bar .dock-tabs-head .dock-tab {
+  appearance: none; border: none; background: transparent;
+  color: var(--text-tertiary); font-family: var(--font-sans);
+  font-size: 11.5px; font-weight: 600; padding: 4px 9px;
+  border-radius: 6px; cursor: pointer;
+}
+.dock-bar .dock-tabs-head .dock-tab:hover { color: var(--text-primary); background: var(--bg-hover); }
+.dock-bar .dock-tabs-head .dock-tab.active {
+  color: var(--text-primary); background: var(--bg-hover);
+}
+.dock-bar.in-todo #dock-url,
+.dock-bar.in-todo #dock-go,
+.dock-bar.in-todo #dock-edit { display: none; }
+
+/* ---------------- to-do pane ---------------- */
+
+#dock-todoview {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column;
+  background: var(--bg-panel); overflow: hidden;
+}
+.todo-addrow {
+  display: flex; gap: 6px; padding: 10px 12px 6px;
+}
+.todo-addrow input {
+  flex: 1; background: var(--bg-surface); border: 1px solid var(--border-standard);
+  border-radius: 7px; color: var(--text-primary); font-size: 12.5px;
+  padding: 7px 10px; outline: none;
+}
+.todo-addrow input:focus { border-color: var(--accent); }
+.todo-hint {
+  padding: 0 14px 6px; color: var(--text-quaternary); font-size: 10.5px;
+}
+#todo-list {
+  flex: 1; overflow-y: auto; padding: 4px 8px 12px;
+}
+.todo-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 8px; border-radius: 8px; cursor: grab;
+  border: 1px solid transparent;
+}
+.todo-item:hover { background: var(--bg-surface); border-color: var(--border-subtle); }
+.todo-item.dragging { opacity: 0.45; cursor: grabbing; }
+.todo-grip {
+  color: var(--text-quaternary); font-size: 11px; letter-spacing: -2px;
+  user-select: none; flex-shrink: 0;
+}
+.todo-text {
+  flex: 1; font-size: 12.5px; color: var(--text-primary);
+  word-break: break-word;
+}
+.todo-item.done .todo-text {
+  text-decoration: line-through; color: var(--text-quaternary);
+}
+.todo-del {
+  appearance: none; border: none; background: transparent;
+  color: var(--text-quaternary); font-size: 14px; cursor: pointer;
+  opacity: 0; padding: 0 3px; flex-shrink: 0;
+}
+.todo-item:hover .todo-del { opacity: 1; }
+.todo-del:hover { color: var(--red); }

@@ -620,6 +620,102 @@ def build_desktop_app(api_port: int):
         except Exception as exc:
             return web.json_response({"profiles": [], "active": "", "error": str(exc)})
 
+    # ---------------- persistent todos (profile home) ----------------
+
+    def _todo_store():
+        from tools.persistent_todo import PersistentTodoStore
+
+        return PersistentTodoStore(_xavani_home() / "todos.json")
+
+    @routes.get("/desktop/api/todos")
+    async def todos_get(_request: "web.Request") -> "web.Response":
+        try:
+            items = _todo_store().read()
+            return web.json_response({"items": items})
+        except Exception as exc:
+            return web.json_response({"items": [], "error": str(exc)})
+
+    @routes.post("/desktop/api/todos")
+    async def todos_set(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        ids = body.get("order")
+        if not isinstance(ids, list):
+            return web.json_response({"error": "order list required"}, status=400)
+        try:
+            items = _todo_store().reorder([str(i) for i in ids])
+            return web.json_response({"ok": True, "items": items})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+
+    @routes.post("/desktop/api/todos/item")
+    async def todos_item(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        item_id = str(body.get("id", "")).strip()
+        if not item_id:
+            return web.json_response({"error": "id required"}, status=400)
+        store = _todo_store()
+        if body.get("content") is not None and body.get("status") is None:
+            current = {i["id"]: i for i in store.read()}
+            if item_id not in current:
+                return web.json_response({"error": "no such id"}, status=404)
+        updated = store.set_status(item_id, str(body.get("status", "")))
+        if updated is None:
+            return web.json_response({"error": "no such id or bad status"}, status=404)
+        return web.json_response({"ok": True, "item": updated})
+
+    @routes.post("/desktop/api/todos/add")
+    async def todos_add(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        content = str(body.get("content", "")).strip()
+        if not content:
+            return web.json_response({"error": "content required"}, status=400)
+        store = _todo_store()
+        current = store.read()
+        next_n = 1
+        used = set()
+        for it in current:
+            used.add(it["id"])
+        while str(next_n) in used:
+            next_n += 1
+        merged = store.write(
+            [{"id": str(next_n), "content": content, "status": "pending"}],
+            merge=True,
+        )
+        return web.json_response({"ok": True, "items": merged})
+
+    @routes.post("/desktop/api/todos/delete")
+    async def todos_delete(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        item_id = str(body.get("id", "")).strip()
+        if not item_id:
+            return web.json_response({"error": "id required"}, status=400)
+        store = _todo_store()
+        remaining = [i for i in store.read() if i["id"] != item_id]
+        items = store.write(remaining, merge=False)
+        return web.json_response({"ok": True, "items": items})
+
+    @routes.get("/desktop/api/outstanding")
+    async def outstanding_get(_request: "web.Request") -> "web.Response":
+        try:
+            from xavani_wisdom.outstanding import OutstandingLedger
+
+            ledger = OutstandingLedger(_xavani_home() / "outstanding.jsonl")
+            return web.json_response({"items": ledger.items()})
+        except Exception as exc:
+            return web.json_response({"items": [], "error": str(exc)})
+
     # ---------------- skills hub (GitHub-backed) ----------------
 
     @routes.get("/desktop/api/skills/hub/search")
