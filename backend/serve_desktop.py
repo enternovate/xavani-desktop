@@ -750,6 +750,33 @@ def build_desktop_app(api_port: int):
             pass
         return web.json_response({"activities": activities})
 
+    @routes.post("/desktop/api/profiles/switch")
+    async def profiles_switch(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        name = str(body.get("name", "")).strip()
+        if not name:
+            return web.json_response({"error": "name required"}, status=400)
+        try:
+            from xavani_cli import profiles as profiles_mod
+
+            canonical = profiles_mod.normalize_profile_name(name)
+            if canonical != "default" and not (
+                profiles_mod._get_profiles_root() / canonical
+            ).exists():
+                return web.json_response({"error": f"no such profile: {canonical}"}, status=404)
+            path = profiles_mod._get_active_profile_path()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if canonical == "default":
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(canonical, encoding="utf-8")
+            return web.json_response({"ok": True, "active": canonical, "restart": True})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)}, status=500)
+
     # ---------------- skills hub (GitHub-backed) ----------------
 
     @routes.get("/desktop/api/skills/hub/search")

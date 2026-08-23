@@ -121,6 +121,63 @@ function startOutstandingReminders() {
   setInterval(checkOutstanding, OUTSTANDING_POLL_MS);
 }
 
+/* ---------------- sidebar foot: profile switcher + settings ---------------- */
+
+async function renderProfileMenu() {
+  const menu = $('#profile-menu');
+  if (!menu) return;
+  menu.innerHTML = '<div class="pm-item dim">Loading…</div>';
+  try {
+    const res = await dapi('/desktop/api/profiles');
+    const d = await res.json();
+    menu.innerHTML = '';
+    for (const p of (d.profiles || [])) {
+      const item = document.createElement('button');
+      item.className = 'pm-item';
+      item.textContent = p.name;
+      if (p.name === d.active) {
+        item.classList.add('active');
+        item.textContent += '  ✓';
+      }
+      item.addEventListener('click', async () => {
+        if (p.name === d.active) { menu.classList.add('hidden'); return; }
+        item.textContent = `${p.name} …`;
+        const r2 = await dapi('/desktop/api/profiles/switch', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: p.name }),
+        }).catch(() => null);
+        const rd = r2 ? await r2.json() : { error: 'request failed' };
+        if (rd.ok) {
+          notify(`Switched to profile "${rd.active}". Restarting engine…`, { kind: 'update' });
+          setTimeout(() => window.xavaniDesktop.restartBackend(), 900);
+        } else {
+          notify(`Profile switch failed: ${rd.error}`, { kind: 'error' });
+        }
+        menu.classList.add('hidden');
+      });
+      menu.appendChild(item);
+    }
+  } catch {
+    menu.innerHTML = '<div class="pm-item dim">Could not load profiles.</div>';
+  }
+}
+
+function setupSidebarFoot() {
+  const chip = $('#foot-profile');
+  const gear = $('#foot-settings');
+  const menu = $('#profile-menu');
+  if (!chip || !gear) return;
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    menu.classList.toggle('hidden');
+    if (!menu.classList.contains('hidden')) renderProfileMenu();
+  });
+  document.addEventListener('click', (e) => {
+    if (!menu.contains(e.target) && e.target !== chip) menu.classList.add('hidden');
+  });
+  gear.addEventListener('click', () => switchView('settings'));
+}
+
 /* ---------------- boot ---------------- */
 
 window.__errs = window.__errs || [];
@@ -187,6 +244,7 @@ async function init() {
   wireComposerClean();
   startActivityPolling();
   startOutstandingReminders();
+  setupSidebarFoot();
 
   window.xavaniDesktop.checkForUpdates().then((info) => {
     if (info && info.updateAvailable && !localStorage.getItem('xz-update-notified')) {
@@ -257,6 +315,8 @@ async function refreshStatus() {
     $('#chip-model').textContent = state.status.model || 'no model';
     $('#chip-provider').textContent = state.status.provider || '—';
     $('#foot-model').textContent = `${state.status.model || 'no model configured'}`;
+    const profChip = $('#foot-profile');
+    if (profChip && state.status.profile) profChip.textContent = state.status.profile;
     $('#health-dot').className = 'dot ok';
   } catch {
     $('#health-dot').className = 'dot bad';
