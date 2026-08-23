@@ -868,6 +868,17 @@ function applySettingsGroup(group) {
   renderSettingsGroups(group);
 }
 
+function settingsErrorCard(box, title, message, group) {
+  const card = settingsCard(title, '', group);
+  const row = document.createElement('div');
+  row.className = 'set-row';
+  row.innerHTML = `<span class="dim" style="color:var(--amber)">${escapeHtml(message)}</span>
+    <button class="btn ghost sm">Retry</button>`;
+  row.querySelector('button').addEventListener('click', () => loadSettings());
+  card.appendChild(row);
+  box.appendChild(card);
+}
+
 async function loadSettings() {
   const box = $('#settings-panel');
   box.innerHTML = '<div class="panel-title">Settings</div><div class="panel-desc">Everything is stored locally in ~/.xavani.</div>';
@@ -881,7 +892,8 @@ async function loadSettings() {
   applySettingsGroup('all');
 
   // --- Appearance ---
-  const skin = await dapi('/desktop/api/skins').then((r) => r.json()).catch(() => null);
+  let skin = null;
+  try { skin = await dapi('/desktop/api/skins').then((r) => r.json()); } catch {}
   if (skin) {
     const c = settingsCard('Appearance', 'Engine skin used by the console and CLI surfaces.', 'general');
     const row = document.createElement('div');
@@ -899,7 +911,43 @@ async function loadSettings() {
       const d = await res.json();
       toast(d.ok ? `Skin set to ${name} (new console sessions)` : (d.error || 'failed'));
     });
+  } else {
+    settingsErrorCard(gen, 'Appearance', 'Could not load skins from the engine.', 'general');
   }
+
+  // --- Memory & data ---
+  const memc = settingsCard('Memory & data', 'Session store and imported memory live in your Xavani home.', 'general');
+  const mrow = document.createElement('div');
+  mrow.className = 'set-row';
+  mrow.innerHTML = `<span class="dim mono">${escapeHtml(s.xavani_home || '~/.xavani')}</span>`;
+  const revealBtn = document.createElement('button');
+  revealBtn.className = 'btn ghost sm';
+  revealBtn.textContent = 'Reveal folder';
+  if (s.xavani_home) revealBtn.addEventListener('click', () => window.xavaniDesktop.revealPath(s.xavani_home));
+  else revealBtn.disabled = true;
+  mrow.appendChild(revealBtn);
+
+  const openTodos = await dapi('/desktop/api/todos').then((r) => r.json()).catch(() => ({ items: [] }));
+  const todoCount = (openTodos.items || []).filter((i) => i.status !== 'completed' && i.status !== 'cancelled').length;
+  const outstanding = await dapi('/desktop/api/outstanding').then((r) => r.json()).catch(() => ({ items: [] }));
+  const outCount = (outstanding.items || []).length;
+  memc.appendChild(cardEl(
+    `Tasks: ${todoCount} open · Outstanding: ${outCount}`,
+    'Managed from the dock To-Do pane and reminder notices.',
+  ));
+  gen.appendChild(memc);
+
+  // --- Voice status ---
+  const vc = settingsCard('Voice input', 'Transcription needs an OpenAI or Groq API key in ~/.xavani/.env.', 'general');
+  const keyRow = document.createElement('div');
+  keyRow.className = 'set-row';
+  keyRow.innerHTML = `<button class="btn ghost sm" id="set-voice-reveal">Open .env</button>
+    <span class="dim">OPENAI_API_KEY or GROQ_API_KEY enables the mic button.</span>`;
+  vc.appendChild(keyRow);
+  keyRow.querySelector('#set-voice-reveal').addEventListener('click', () => {
+    if (s.xavani_home) window.xavaniDesktop.revealPath(s.xavani_home);
+  });
+  gen.appendChild(vc);
 
   // --- Model & provider ---
   const s = state.status || {};
@@ -953,11 +1001,14 @@ async function loadSettings() {
 
   // --- MCP servers ---
   let mcpServers = {};
+  let mccNote = '';
   try {
     const st = await dapi('/desktop/api/settings').then((r) => r.json());
     mcpServers = st.mcp_servers || {};
-  } catch {}
-  const mcc = settingsCard('MCP servers', 'Stdio/HTTP tools the engine connects to at startup.', 'tools');
+  } catch {
+    mccNote = 'Could not read config.yaml — check file permissions.';
+  }
+  const mcc = settingsCard('MCP servers', 'Stdio/HTTP tools the engine connects to at startup.' + (mccNote ? ` ${mccNote}` : ''), 'tools');
   for (const [name, cfgv] of Object.entries(mcpServers)) {
     const row = document.createElement('div');
     row.className = 'set-row';
@@ -999,7 +1050,8 @@ async function loadSettings() {
   });
 
   // --- Profiles ---
-  const prof = await dapi('/desktop/api/profiles').then((r) => r.json()).catch(() => null);
+  let prof = null;
+  try { prof = await dapi('/desktop/api/profiles').then((r) => r.json()); } catch {}
   if (prof) {
     const pcc = settingsCard('Profiles', 'Isolated Xavani homes. Switch with `/profile` in the console — the app restarts into that profile.', 'tools');
     for (const p of (prof.profiles || [])) {
@@ -1009,6 +1061,9 @@ async function loadSettings() {
       pcc.appendChild(row);
     }
     tol.appendChild(pcc);
+  }
+  else {
+    settingsErrorCard(tol, 'Profiles', 'Could not load profiles.', 'tools');
   }
 
   // --- Display zoom ---
