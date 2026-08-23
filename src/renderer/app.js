@@ -2868,6 +2868,8 @@ const MIG_LABELS = {
   codex: 'OpenAI Codex CLI',
   hermes: 'Hermes Agent',
   cursor: 'Cursor',
+  gemini: 'Gemini CLI',
+  opencode: 'OpenCode',
 };
 
 function loadMigration() {
@@ -2915,6 +2917,43 @@ function loadMigration() {
       });
       wrap.appendChild(card);
     }
+
+    // Generic folder import
+    const folderCard = document.createElement('div');
+    folderCard.className = 'mig-card';
+    folderCard.innerHTML = `
+      <div class="mig-head">
+        <span class="mig-name">Any folder</span>
+        <span class="mig-stats">Point at any tool folder with .jsonl transcripts or .md memory files</span>
+      </div>
+      <div class="mig-actions">
+        <input id="mig-folder" class="mono" placeholder="/path/to/tool-home" style="flex:1;min-width:220px">
+        <button class="btn ghost sm" id="mig-folder-scan">Scan</button>
+        <span class="mig-result"></span>
+      </div>`;
+    folderCard.querySelector('#mig-folder-scan').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      const resEl = folderCard.querySelector('.mig-result');
+      const folder = folderCard.querySelector('#mig-folder').value.trim();
+      if (!folder) { resEl.textContent = 'Enter a folder path first.'; return; }
+      btn.disabled = true;
+      resEl.textContent = 'Scanning…';
+      try {
+        const res = await dapi('/desktop/api/migrate/folder', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folder }),
+        });
+        const d = await res.json();
+        if (d.error) { resEl.textContent = `failed: ${d.error}`; }
+        else {
+          resEl.textContent = d.found
+            ? `${d.transcripts} transcript(s), ${d.memory_files.length} memory file(s) found`
+            : 'No transcripts or memory files found.';
+        }
+      } catch (e) { resEl.textContent = `failed: ${e}`; }
+      btn.disabled = false;
+    });
+    wrap.appendChild(folderCard);
   }).catch(() => {
     $('#import-panel').innerHTML = '<div class="empty">Scan failed — backend unreachable.</div>';
   });

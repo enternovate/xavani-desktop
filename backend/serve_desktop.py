@@ -810,6 +810,8 @@ def build_desktop_app(api_port: int):
         "codex": {"home": Path.home() / ".codex", "globs": ["sessions/**/*.jsonl", "*.jsonl"]},
         "hermes": {"home": Path.home() / ".hermes", "globs": ["sessions/**/*.jsonl", "terminal-sessions/**/*.jsonl"]},
         "cursor": {"home": Path.home() / "Library" / "Application Support" / "Cursor", "globs": []},
+        "gemini": {"home": Path.home() / ".gemini", "globs": ["tmp/**/*.jsonl", "**/*.json"]},
+        "opencode": {"home": Path.home() / ".local" / "share" / "opencode", "globs": ["**/*.jsonl"]},
     }
 
     # Human labels for imported-session titles (referenced by label_for below).
@@ -818,6 +820,8 @@ def build_desktop_app(api_port: int):
         "codex": "Codex",
         "hermes": "Hermes",
         "cursor": "Cursor",
+        "gemini": "Gemini CLI",
+        "opencode": "OpenCode",
     }
 
     def _memory_files(home: Path) -> list[str]:
@@ -845,6 +849,25 @@ def build_desktop_app(api_port: int):
             if home.exists():
                 n += sum(1 for f in home.glob(g) if f.is_file())
         return n
+
+    @routes.post("/desktop/api/migrate/folder")
+    async def migrate_folder(request: "web.Request") -> "web.Response":
+        """Scan an arbitrary folder for jsonl transcripts and md memory files."""
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        folder = Path(str(body.get("folder", "")).strip()).expanduser()
+        if not folder.is_dir():
+            return web.json_response({"error": "folder does not exist"}, status=404)
+        transcripts = [str(p) for p in sorted(folder.rglob("*.jsonl")) if p.is_file()][:200]
+        memory_files = [str(p) for p in sorted(folder.glob("*.md")) if p.is_file()][:12]
+        return web.json_response({
+            "found": bool(transcripts or memory_files),
+            "transcripts": len(transcripts),
+            "memory_files": memory_files,
+            "transcript_paths": transcripts,
+        })
 
     @routes.get("/desktop/api/migrate/scan")
     async def migrate_scan(_request: "web.Request") -> "web.Response":
