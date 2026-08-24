@@ -82,11 +82,30 @@ for p in gavaza nyarhi mhangani constellation-mcp; do
   fi
 done
 
+echo "==> DMG stage layout (before signing — nothing may touch the app after codesign)"
+ln -sf /Applications "$STAGE/Applications"
+
 echo "==> Ad-hoc code signing"
-codesign --force --deep --sign - "$APP" 2>/dev/null
+if [ -n "${XAVANI_SIGN_IDENTITY:-}" ] && [ "$XAVANI_SIGN_IDENTITY" != "-" ]; then
+  ENTITLEMENTS="$ROOT/build/entitlements.plist"
+  if [ ! -f "$ENTITLEMENTS" ]; then
+    cat > "$ENTITLEMENTS" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>com.apple.security.cs.allow-jit</key><true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key><true/>
+</dict></plist>
+PLIST
+  fi
+  codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS" \
+    --sign "$XAVANI_SIGN_IDENTITY" "$APP"
+else
+  codesign --force --deep --sign - "$APP"
+fi
+codesign --verify --deep --strict "$APP" && echo "==> Seal check OK"
 
 echo "==> DMG"
-ln -sf /Applications "$STAGE/Applications"
 DMG="$ROOT/dist/Xavani-${VERSION}-macos-arm64.dmg"
 mkdir -p "$ROOT/dist"
 rm -f "$DMG"
