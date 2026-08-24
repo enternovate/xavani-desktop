@@ -158,6 +158,16 @@ async function renderProfileMenu() {
       });
       menu.appendChild(item);
     }
+    menu.style.position = 'fixed';
+    menu.style.bottom = 'auto';
+    const rect = $('#foot-profile').getBoundingClientRect();
+    menu.style.visibility = 'hidden';
+    menu.style.display = 'flex';
+    const mh = menu.offsetHeight || 40;
+    menu.style.left = `${Math.round(rect.left)}px`;
+    menu.style.top = `${Math.max(8, Math.round(rect.top - mh - 6))}px`;
+    menu.style.zIndex = '4000';
+    menu.style.visibility = '';
   } catch {
     menu.innerHTML = '<div class="pm-item dim">Could not load profiles.</div>';
   }
@@ -344,7 +354,7 @@ function renderSessions(sessions) {
   for (const s of visible) {
     const el = document.createElement('button');
     el.className = 'session-item';
-    const label = s.title || s.preview || 'Untitled session';
+    const label = s.title || s.preview || (s.message_count != null ? `${s.message_count} msg${s.message_count === 1 ? '' : 's'}` : 'Session');
     el.title = label;
     el.innerHTML = `<span class="s-title">${escapeHtml(String(label).slice(0, 80))}</span><span class="when">${escapeHtml(String(s.source || 'desktop'))} · ${fmtWhen(s.last_active)}</span>`;
     el.addEventListener('click', () => openSession(s.id, el));
@@ -948,11 +958,13 @@ async function loadCron() {
         await api(`/api/jobs/${j.id}`, { method: 'DELETE' }).catch(() => {});
         refresh();
       }, 'danger'));
-      const schedule = j.schedule || j.cron || j.interval || '';
+      const sched = j.schedule ?? j.cron ?? j.interval ?? '';
+      const schedule = typeof sched === 'string' ? sched : (sched && typeof sched === 'object' ? JSON.stringify(sched) : String(sched || ''));
+      const promptStr = typeof j.prompt === 'string' ? j.prompt.slice(0, 160) : (j.prompt && typeof j.prompt === 'object' ? JSON.stringify(j.prompt).slice(0, 160) : '');
       box.appendChild(cardEl(
-        j.name || j.prompt || j.id,
-        typeof j.prompt === 'string' ? j.prompt.slice(0, 160) : '',
-        { text: `${schedule}`, mono: true },
+        j.name || j.id,
+        promptStr,
+        { text: schedule, mono: true },
         actions,
       ));
     }
@@ -1052,6 +1064,7 @@ function settingsErrorCard(box, title, message, group) {
 }
 
 async function loadSettings() {
+  const s = state.status || {};
   const box = $('#settings-panel');
   box.innerHTML = '<div class="panel-title">Settings</div><div class="panel-desc">Everything is stored locally in ~/.xavani.</div>';
   const strip = document.createElement('div');
@@ -1164,7 +1177,6 @@ async function loadSettings() {
   gen.appendChild(sec);
 
   // --- Model & provider ---
-  const s = state.status || {};
   const mc = settingsCard('Model & provider', 'Current model for new chats.', 'models');
   mc.appendChild(cardEl(s.model || 'not configured', s.provider ? `provider: ${s.provider}` : 'open the picker to choose one', null, (() => {
     const b = document.createElement('button');
