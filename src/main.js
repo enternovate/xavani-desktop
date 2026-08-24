@@ -150,7 +150,8 @@ function isNewer(remote, local) {
 
 function fetchJson(url, timeoutMs = 10000) {
   return new Promise((resolve) => {
-    const req = http.get(url, {
+    const mod = url.startsWith('https:') ? require('node:https') : http;
+    const req = mod.get(url, {
       headers: { 'User-Agent': 'xavani-desktop', Accept: 'application/vnd.github+json' },
       timeout: timeoutMs,
     }, (res) => {
@@ -309,8 +310,8 @@ if (!gotLock) {
 
     createWindow();
     startBackend();
-    setInterval(checkForUpdates, UPDATE_INTERVAL_MS);
-    setTimeout(checkForUpdates, 8000);
+    setInterval(() => checkForUpdates().catch(() => {}), UPDATE_INTERVAL_MS);
+    setTimeout(() => checkForUpdates().catch(() => {}), 8000);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();
