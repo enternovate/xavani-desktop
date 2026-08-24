@@ -180,9 +180,9 @@ body {
 body.mac #topbar { padding-left: 84px; }
 #topbar-title { font-size: 13px; font-weight: 590; letter-spacing: -0.09px; color: var(--text-primary); }
 .topbar-right { margin-left: auto; display: flex; gap: 8px; -webkit-app-region: no-drag; }
-.topbar-chips { margin-left: auto; display: flex; gap: 8px; -webkit-app-region: no-drag; }
-.topbar-right { margin-left: 12px; }
-.topbar-chips .chip { min-width: 96px; text-align: center; justify-content: center; }
+.topbar-chips { margin-left: auto; display: flex; gap: 8px; -webkit-app-region: no-drag; min-width: 0; overflow: hidden; flex-shrink: 1; }
+.topbar-right { margin-left: 12px; flex-shrink: 0; }
+.topbar-chips .chip { min-width: 96px; max-width: 170px; overflow: hidden; text-overflow: ellipsis; text-align: center; justify-content: center; }
 .chip.unsupported { opacity: 0.45; }
 .chip.on { color: var(--accent-bright, #7170ff); border-color: rgba(113,112,255,0.55); }
 #toast {
@@ -387,11 +387,12 @@ body.mac #sidebar { padding-top: 40px; }
   background: var(--bg-panel); flex-direction: column;
 }
 .dock-bar {
-  display: flex; gap: 6px; align-items: center; padding: 8px 10px;
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 8px 10px;
   border-bottom: 1px solid var(--border-subtle);
 }
+.dock-tabs-head { width: 100%; }
 #dock-url {
-  flex: 1; background: rgba(255,255,255,0.03); border: 1px solid var(--border-standard);
+  flex: 1; min-width: 130px; background: rgba(255,255,255,0.03); border: 1px solid var(--border-standard);
   border-radius: 6px; color: var(--text-primary); font-size: 11.5px; padding: 5px 9px; outline: none;
 }
 #dock-url:focus { border-color: rgba(113,112,255,0.5); }
@@ -458,7 +459,7 @@ webview { width: 100%; height: 100%; border: none; display: block; }
   overflow-x: auto; flex-shrink: 0;
 }
 .console-toolbar::-webkit-scrollbar { height: 0; }
-#cli-chips { display: flex; gap: 6px; }
+#cli-chips { display: flex; gap: 6px; flex-wrap: wrap; }
 .chip-cmd {
   font-family: var(--font-mono); font-size: 11px; font-weight: 500;
   color: var(--text-tertiary); background: rgba(255,255,255,0.03);
@@ -896,7 +897,7 @@ body.dock-resizing #dock-webview { pointer-events: none; }
   background: rgba(94,106,210,0.14); color: var(--text-secondary);
   border: 1px solid rgba(113,112,255,0.35); border-radius: 20px;
   font-size: 11px; padding: 4px 12px; margin-right: 8px;
-  max-width: 380px; white-space: nowrap; overflow: hidden;
+  max-width: 240px; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis;
 }
 .activity-pill.hidden { display: none; }
@@ -979,3 +980,46 @@ body.dock-resizing #dock-webview { pointer-events: none; }
 }
 .cron-form input:focus { border-color: var(--accent); }
 #cron-create-err { min-height: 16px; margin-bottom: 6px; }
+
+/* ---------------- editor syntax-highlight overlay ---------------- */
+
+#editor-hl {
+  position: absolute; top: 0; bottom: 0; left: 47px; right: 0;
+  margin: 0; overflow: hidden; pointer-events: none; z-index: 0;
+  padding: 10px 14px; font-size: 12.5px; line-height: 1.55;
+  tab-size: 2; white-space: pre; color: var(--text-primary); background: #0b0c0e;
+}
+#editor {
+  color: transparent; caret-color: var(--text-primary);
+  position: relative; z-index: 1;
+}
+#editor::selection { background: rgba(113, 112, 255, 0.30); }
+#editor-hl .tok-com { color: #5c6370; font-style: italic; }
+#editor-hl .tok-str { color: #96c98a; }
+#editor-hl .tok-num { color: #e5a56b; }
+#editor-hl .tok-kw { color: #b4a0f5; }
+#editor-hl .tok-kw2 { color: #82aaff; }
+#editor-hl .tok-tag { color: #ef7d92; }
+#editor-hl .tok-attr { color: #73c8dd; }
+
+/* dock file viewer shares the same token palette */
+#dock-filecode .tok-com, #dock-filegutter ~ * .tok-com { color: #5c6370; font-style: italic; }
+#dock-filecode .tok-str { color: #96c98a; }
+#dock-filecode .tok-num { color: #e5a56b; }
+#dock-filecode .tok-kw { color: #b4a0f5; }
+#dock-filecode .tok-kw2 { color: #82aaff; }
+#dock-filecode .tok-tag { color: #ef7d92; }
+#dock-filecode .tok-attr { color: #73c8dd; }
+
+/* auto-follow pill at the end of the dock tab strip */
+.dock-follow {
+  margin-left: auto; align-self: center; flex-shrink: 0;
+  font-size: 10px; padding: 2px 9px; border-radius: 999px;
+  border: 1px solid var(--border-subtle); color: var(--text-quaternary);
+  cursor: pointer; user-select: none; white-space: nowrap;
+}
+.dock-follow.on {
+  color: #a5a4ff; border-color: rgba(113, 112, 255, 0.45);
+  background: rgba(113, 112, 255, 0.10);
+}
+.dock-follow:hover { color: var(--text-primary); }
