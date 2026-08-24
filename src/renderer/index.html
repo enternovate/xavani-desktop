@@ -179,6 +179,7 @@
         </header>
         <div id="editor-wrap">
           <div id="editor-gutter" class="mono">1</div>
+          <pre id="editor-hl" class="mono" aria-hidden="true"></pre>
           <textarea id="editor" class="mono" spellcheck="false" autocomplete="off" wrap="off"></textarea>
           <div id="editor-empty" class="empty">No file open.<br><br>Pick one from the Explorer on the left, or start a dev server and load it in the Preview on the right.</div>
         </div>
@@ -200,7 +201,7 @@
       </div>
       <div id="dock-tabs"></div>
       <div class="dock-body">
-        <webview id="dock-webview" src="http://localhost:3000" allowpopups></webview>
+        <webview id="dock-webview" src="about:blank" allowpopups></webview>
         <div id="dock-todoview" class="hidden">
           <div class="todo-addrow">
             <input id="todo-input" placeholder="Add a task…" spellcheck="false">

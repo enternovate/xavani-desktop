@@ -551,7 +551,7 @@ def build_desktop_app(api_port: int):
 
     # ---------------- settings (whitelisted config sections) ----------------
 
-    _SETTINGS_KEYS = frozenset({"permissions", "mcp_servers", "memory", "tools", "display", "terminal"})
+    _SETTINGS_KEYS = frozenset({"permissions", "mcp_servers", "memory", "tools", "display", "terminal", "approvals", "privacy", "security"})
 
     @routes.get("/desktop/api/settings")
     async def settings_get(_request: "web.Request") -> "web.Response":

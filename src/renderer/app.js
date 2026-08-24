@@ -8,6 +8,7 @@ const state = {
   apiPort: null,
   desktopPort: null,
   sessionId: null,
+  dockUserClosed: false,
   running: false,
   currentController: null,
   currentRunId: null,
@@ -108,7 +109,7 @@ async function checkOutstanding() {
         kind: 'info',
         ms: 12000,
         onClick: () => {
-          if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+          if (!state.dockUserClosed && !$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
           document.querySelector('#tab-todo').click();
         },
       },
@@ -345,7 +346,7 @@ function renderSessions(sessions) {
     el.className = 'session-item';
     const label = s.title || s.preview || 'Untitled session';
     el.title = label;
-    el.innerHTML = `<span class="s-title">${escapeHtml(String(label).slice(0, 80))}</span><span class="when">${fmtWhen(s.last_active)}</span>`;
+    el.innerHTML = `<span class="s-title">${escapeHtml(String(label).slice(0, 80))}</span><span class="when">${escapeHtml(String(s.source || 'desktop'))} · ${fmtWhen(s.last_active)}</span>`;
     el.addEventListener('click', () => openSession(s.id, el));
     box.appendChild(el);
   }
@@ -365,6 +366,7 @@ async function openSession(id, el) {
   state.activeSessionItem = el;
   document.querySelectorAll('.session-item').forEach((x) => x.classList.remove('active'));
   if (el) el.classList.add('active');
+  let meta = (state.lastSessions || []).find((s) => s.id === id) || {};
   try {
     const res = await dapi(`/desktop/api/sessions/${encodeURIComponent(id)}/messages`);
     const data = await res.json();
@@ -372,6 +374,16 @@ async function openSession(id, el) {
   } catch { state.messages = []; }
   switchView('chat');
   renderMessages();
+  if (!state.messages.length) {
+    const box = $('#messages');
+    const note = document.createElement('div');
+    note.className = 'empty';
+    note.style.padding = '24px';
+    note.innerHTML = `<div class="c-name">No transcript stored locally</div>
+      <div class="c-desc">Session <code>${escapeHtml(String(id))}</code> (${escapeHtml(String(meta.source || 'unknown'))}) has no message rows on this machine.
+      Gateway-origin sessions keep their transcripts on the gateway host — run the gateway there or use session_search from that host.</div>`;
+    box.appendChild(note);
+  }
   scrollBottom(true);
 }
 
@@ -1108,6 +1120,48 @@ async function loadSettings() {
     if (s.xavani_home) window.xavaniDesktop.revealPath(s.xavani_home);
   });
   gen.appendChild(vc);
+
+  // --- Security & privacy ---
+  const sec = settingsCard('Security & privacy', 'Redaction and command-approval behaviour. Applies to new sessions.', 'general');
+  let secCfg = {};
+  try {
+    const cur = await dapi('/desktop/api/settings').then((r) => r.json());
+    secCfg = { approvals: cur.approvals || {}, privacy: cur.privacy || {}, security: cur.security || {} };
+  } catch {}
+  const postKey = async (key, patch) => {
+    try {
+      const res = await dapi('/desktop/api/settings', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [key]: { ...(secCfg[key] || {}), ...patch } }),
+      });
+      const d = await res.json();
+      if (!d.ok) throw new Error(d.error || 'failed');
+      if (secCfg[key]) Object.assign(secCfg[key], patch);
+      toast('Saved — applies to new sessions');
+    } catch (e) {
+      toast(`Save failed: ${e.message}`);
+    }
+  };
+  const approvalSel = document.createElement('select');
+  approvalSel.innerHTML = ['manual', 'smart', 'off'].map((m) => `<option value="${m}">${m}</option>`).join('');
+  approvalSel.value = ['manual', 'smart', 'off'].includes(secCfg.approvals?.mode) ? secCfg.approvals.mode : 'manual';
+  approvalSel.addEventListener('change', () => postKey('approvals', { mode: approvalSel.value }));
+  const mkToggle = (label, group, field, checked, onChange) => {
+    const row = document.createElement('div');
+    row.className = 'set-row';
+    row.innerHTML = `<label class="wiz-check"><input type="checkbox" ${checked ? 'checked' : ''}> ${escapeHtml(label)}</label>
+      <span class="dim">${escapeHtml(group)}</span>`;
+    row.querySelector('input').addEventListener('change', (ev) => onChange(ev.target.checked));
+    sec.appendChild(row);
+  };
+  const apro = document.createElement('div');
+  apro.className = 'set-row';
+  apro.innerHTML = `<span>Command approvals</span><span class="dim">prompt · LLM-assisted · bypass all</span>`;
+  apro.appendChild(approvalSel);
+  sec.appendChild(apro);
+  mkToggle('Mask secrets in tool output', 'security.redact_secrets', null, !!secCfg.security?.redact_secrets, (v) => postKey('security', { redact_secrets: v }));
+  mkToggle('Hash user IDs + strip phone numbers (gateway)', 'privacy.redact_pii', null, !!secCfg.privacy?.redact_pii, (v) => postKey('privacy', { redact_pii: v }));
+  gen.appendChild(sec);
 
   // --- Model & provider ---
   const s = state.status || {};
@@ -2121,7 +2175,11 @@ function setupDock() {
     $('#app').classList.toggle('dock-open');
     setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
   });
-  $('#dock-close').addEventListener('click', () => $('#app').classList.remove('dock-open'));
+  $('#dock-close').addEventListener('click', () => {
+    state.dockUserClosed = true;
+    $('#app').classList.remove('dock-open');
+  });
+  $('#dock-toggle').addEventListener('click', () => { state.dockUserClosed = false; });
   const go = () => {
     const url = $('#dock-url').value.trim();
     if (!/^https?:\/\//.test(url)) return;
@@ -2548,6 +2606,7 @@ function toggleStudio(force) {
   $('#explorer').classList.toggle('hidden', !studio.open);
   if (studio.open) {
     switchView('studio');
+    state.dockUserClosed = false;
     if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
     loadWorkspaceRoot();
   } else {
@@ -2575,9 +2634,11 @@ function setupStudio() {
       renderTabs();
     }
     syncGutter();
+    paintEditorHl();
   });
   editor.addEventListener('scroll', () => {
     $('#editor-gutter').scrollTop = editor.scrollTop;
+    syncEditorHlScroll();
   });
 
   document.addEventListener('keydown', (e) => {
@@ -2720,8 +2781,10 @@ function activateTab(path) {
   $('#editor').style.display = tab ? '' : 'none';
   $('#editor-gutter').style.display = tab ? '' : 'none';
   $('#editor').value = tab ? tab.content : '';
+  $('#editor-hl').style.display = tab ? '' : 'none';
   renderTabs();
   syncGutter();
+  paintEditorHl();
 }
 
 function renderTabs() {
@@ -2801,6 +2864,127 @@ const FILE_PATH_RE = /[A-Za-z0-9_@./~-]+\.(?:html?|css|scss|less|js|jsx|mjs|cjs|
 
 function dockTabName(p) { return p.split('/').pop(); }
 
+/* ---------------- syntax highlighting ---------------- */
+
+function langOf(p) {
+  const ext = ((p || '').split('.').pop() || '').toLowerCase();
+  return ({
+    js: 'js', jsx: 'js', mjs: 'js', cjs: 'js', ts: 'js', tsx: 'js',
+    json: 'json', jsonc: 'json',
+    html: 'html', htm: 'html', xml: 'html', svg: 'html', vue: 'html', svelte: 'html',
+    css: 'css', scss: 'css', less: 'css',
+    py: 'py', pyw: 'py', rb: 'py',
+    sh: 'sh', bash: 'sh', zsh: 'sh', env: 'sh',
+    yml: 'yaml', yaml: 'yaml',
+    md: 'markdown', markdown: 'markdown',
+  })[ext] || null;
+}
+
+const HL_RULES = {
+  js: [
+    [/\/\*[\s\S]*?\*\/|\/\/[^\n]*/, 'com'],
+    [/`(?:\\[\s\S]|[^`\\])*`|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/, 'str'],
+    [/\b(?:const|let|var|function|return|if|else|for|while|do|switch|case|break|continue|new|class|extends|super|this|typeof|instanceof|delete|void|static|get|set)\b/, 'kw'],
+    [/\b(?:async|await|yield|import|from|export|default|try|catch|finally|throw)\b/, 'kw'],
+    [/\b(?:true|false|null|undefined|NaN|Infinity)\b/, 'kw2'],
+    [/\b0x[\da-fA-F]+\b|\b\d+(?:\.\d+)?(?:e[+-]?\d+)?\b/, 'num'],
+  ],
+  json: [
+    [/"(?:\\.|[^"\\])*"(?=\s*:)/, 'attr'],
+    [/"(?:\\.|[^"\\])*"/, 'str'],
+    [/\b(?:true|false|null)\b/, 'kw2'],
+    [/-?\d+(?:\.\d+)?(?:e[+-]?\d+)?/i, 'num'],
+  ],
+  html: [
+    [/<!--[\s\S]*?-->|<!DOCTYPE[^>]*>/i, 'com'],
+    [/<\/?[a-zA-Z][\w:-]*/, 'tag'],
+    [/"[^"]*"|'[^']*'/, 'str'],
+    [/\b[\w:-]+(?==)/, 'attr'],
+  ],
+  css: [
+    [/\/\*[\s\S]*?\*\//, 'com'],
+    [/"[^"\n]*"|'[^'\n]*'/, 'str'],
+    [/@[\w-]+|!important\b/, 'kw'],
+    [/#[\da-fA-F]{3,8}\b/, 'num'],
+    [/\b\d+(?:\.\d+)?(?:px|em|rem|%|vh|vw|vmin|vmax|s|ms|fr|deg|ch|ex|pt)?\b/, 'num'],
+    [/[a-zA-Z-]+(?=\s*:)/, 'attr'],
+  ],
+  py: [
+    [/#[^\n]*/, 'com'],
+    [/"""[\s\S]*?"""|'''[\s\S]*?'''/, 'str'],
+    [/"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*'/, 'str'],
+    [/@[\w.]+/, 'attr'],
+    [/\b(?:def|class|return|if|elif|else|for|while|in|not|and|or|import|from|as|with|try|except|finally|raise|lambda|pass|break|continue|global|nonlocal|yield|assert|del|is|async|await)\b/, 'kw'],
+    [/\b(?:True|False|None|self)\b/, 'kw2'],
+    [/\b0x[\da-fA-F]+\b|\b\d+(?:\.\d+)?\b/, 'num'],
+  ],
+  sh: [
+    [/#[^\n]*/, 'com'],
+    [/"(?:\\.|[^"\\])*"|'[^']*'/, 'str'],
+    [/\$\{[^}]*\}|\$[\w@#?*!$-]+/, 'attr'],
+    [/\b(?:if|then|else|elif|fi|for|while|do|done|case|esac|in|function|export|local|return|source|set|unset|readonly|shift)\b/, 'kw'],
+  ],
+  yaml: [
+    [/#[^\n]*/, 'com'],
+    [/^[ \t]*-?[ \t]*[\w./-]+(?=[ \t]*:(?:\s|$))/m, 'attr'],
+    [/"(?:\\.|[^"\\\n])*"|'[^'\n]*'/, 'str'],
+    [/\b(?:true|false|null|yes|no|on|off)\b/i, 'kw2'],
+    [/-?\b\d+(?:\.\d+)?\b/, 'num'],
+  ],
+  markdown: [
+    [/```[\s\S]*?```|~~~[\s\S]*?~~~/, 'com'],
+    [/^#{1,6}[^\n]*/m, 'kw'],
+    [/`[^`\n]+`/, 'str'],
+    [/\*\*[^*\n]+\*\*|__[^_\n]+__/, 'attr'],
+    [/\[[^\]\n]*\]\([^)\n]*\)/, 'tag'],
+  ],
+};
+
+const HL_COMPILED = {};
+for (const [lang, rules] of Object.entries(HL_RULES)) {
+  const flags = rules.some((r) => r[0].source.includes('^')) ? 'gm' : 'g';
+  HL_COMPILED[lang] = {
+    re: new RegExp(rules.map((r) => `(${r[0].source})`).join('|'), flags),
+    cls: rules.map((r) => r[1]),
+  };
+}
+
+function highlightCode(code, lang) {
+  const compiled = lang && HL_COMPILED[lang];
+  if (!compiled || !code) return escapeHtml(code || '');
+  const { re, cls } = compiled;
+  re.lastIndex = 0;
+  let out = '';
+  let last = 0;
+  let m;
+  while ((m = re.exec(code))) {
+    if (!m[0]) { re.lastIndex++; continue; }
+    out += escapeHtml(code.slice(last, m.index));
+    const gi = m.slice(1).findIndex((x) => x !== undefined);
+    out += `<span class="tok-${cls[gi] || 'plain'}">${escapeHtml(m[0])}</span>`;
+    last = m.index + m[0].length;
+  }
+  out += escapeHtml(code.slice(last));
+  return out;
+}
+
+function paintEditorHl() {
+  const hl = $('#editor-hl');
+  if (!hl) return;
+  const tab = activeTab();
+  if (!tab) { hl.innerHTML = ''; return; }
+  hl.innerHTML = highlightCode($('#editor').value.replace(/\t/g, '  '), langOf(tab.path));
+  syncEditorHlScroll();
+}
+
+function syncEditorHlScroll() {
+  const ed = $('#editor');
+  const hl = $('#editor-hl');
+  if (!ed || !hl) return;
+  hl.scrollTop = ed.scrollTop;
+  hl.scrollLeft = ed.scrollLeft;
+}
+
 function renderDockTabs() {
   const wrap = $('#dock-tabs');
   wrap.innerHTML = '';
@@ -2824,6 +3008,14 @@ function renderDockTabs() {
     });
     if (t.fresh) setTimeout(() => { t.fresh = false; el.classList.remove('fresh'); }, 1400);
   }
+  const fb = document.createElement('div');
+  fb.className = `dock-follow${dockState.follow ? ' on' : ''}`;
+  fb.textContent = dockState.follow ? '\u21ca auto' : '\u23f8 paused';
+  fb.title = dockState.follow
+    ? 'Auto-flip is ON \u2014 the pane follows files as the agent writes them. Click to pause.'
+    : 'Auto-flip is paused \u2014 click to follow agent writes again.';
+  fb.addEventListener('click', () => { dockState.follow = !dockState.follow; renderDockTabs(); });
+  wrap.appendChild(fb);
 }
 
 function setDockTab(id) {
@@ -2920,7 +3112,7 @@ async function loadFileIntoDock(path) {
       $('#dock-filegutter').textContent = '';
       return;
     }
-    $('#dock-filecode').textContent = d.content.replace(/\t/g, '  ');
+    $('#dock-filecode').innerHTML = highlightCode(d.content.replace(/\t/g, '  '), langOf(path));
     let g = '';
     const n = d.content.split('\n').length;
     for (let i = 1; i <= n; i++) g += i + '\n';
@@ -2959,6 +3151,7 @@ function agentTouchedFile(evt) {
   if (!/writ|patch|edit|creat|save|apply/.test(tool)) return;
   const path = extractFilePath(evt);
   if (!path) return;
+  dockState.dirtyRun = true;
   clearTimeout(dockRefreshTimers[path]);
   dockRefreshTimers[path] = setTimeout(() => {
     dockOpenFile(path, false);
@@ -2975,10 +3168,16 @@ function agentTouchedFile(evt) {
 function dockRunEnded() {
   if (!dockState.follow) return;
   if (dockState.active !== 'preview') setDockTab('preview');
+  if (state.dockNavigated && dockState.dirtyRun) {
+    const wv = $('#dock-webview');
+    try { wv.reloadIgnoringCache(); } catch { try { wv.reload(); } catch {} }
+    dockState.dirtyRun = false;
+  }
 }
 
 function dockFlip() {
-  if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+  if (!state.dockUserClosed && !$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+  state.dockUserClosed = false;
   if (dockState.active === 'preview') {
     if (dockState.fileTabs.length) setDockTab(dockState.fileTabs[0].path);
   } else {
