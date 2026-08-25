@@ -562,8 +562,19 @@ async function consumeEvents(runId, block) {
     block._bubble.innerHTML = md(acc);
     scrollBottom();
   };
+  // rAF-aligned paint: one DOM update per display frame (device Hz),
+  // instead of a fixed setTimeout cadence. The rAF loop stops itself
+  // once the pending frame paints — no idle burn between deltas.
+  let rafId = null;
   const schedulePaint = () => {
-    if (!renderQueued) { renderQueued = true; setTimeout(paint, 60); }
+    if (rafId != null) return;
+    rafId = requestAnimationFrame(() => {
+      rafId = null;
+      paint();
+    });
+  };
+  const cancelScheduledPaint = () => {
+    if (rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
   };
 
   const addToolCard = (evt) => {
@@ -645,6 +656,7 @@ async function consumeEvents(runId, block) {
   if (finalBlock && finalBlock.usage) {
     $('#usage-chip').textContent = `${finalBlock.usage.total_tokens.toLocaleString()} tokens`;
   }
+  cancelScheduledPaint();
   dockRunEnded();
   finishBlock(block, null);
   block._bubble.innerHTML = md(acc || (finalBlock && finalBlock.output) || '*(no output)*');
