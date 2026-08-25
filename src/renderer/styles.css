@@ -1023,3 +1023,10 @@ body.dock-resizing #dock-webview { pointer-events: none; }
   background: rgba(113, 112, 255, 0.10);
 }
 .dock-follow:hover { color: var(--text-primary); }
+
+/* edit-diff preview (dock file pane) */
+.diff-line { display: block; white-space: pre-wrap; }
+.diff-add  { color: var(--green); background: rgba(16, 185, 129, 0.08); }
+.diff-del  { color: var(--red); background: rgba(235, 87, 87, 0.08); }
+.diff-hunk { color: #7170ff; background: rgba(113, 112, 255, 0.08); }
+.diff-meta { color: var(--text-dim, #888); }

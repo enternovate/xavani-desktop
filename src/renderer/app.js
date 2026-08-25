@@ -635,6 +635,9 @@ async function consumeEvents(runId, block) {
             card.querySelector('.t-status').textContent = evt.duration != null ? `${evt.duration}s` : (evt.error ? 'error' : 'done');
           }
           agentTouchedFile(evt);
+          // Edit tools may carry the unified diff — render it live in
+          // the dock so the user sees exactly what changed.
+          if (evt.diff && dockState.follow) showEditDiffInDock(evt.path, evt.diff);
           break;
         }
         case 'reasoning.available':
@@ -3167,6 +3170,44 @@ function extractFilePath(evt) {
   const hay = `${evt.preview || ''}`;
   const m = hay.match(FILE_PATH_RE);
   return m ? m[m.length - 1] : null;
+}
+
+/* ---------------- edit-diff preview pane ---------------- */
+
+// Classify one unified-diff line. Order matters: file headers (---/+++)
+// must win over the +/- body classes.
+function classifyDiffLine(line) {
+  if (line.startsWith('---') || line.startsWith('+++')) return 'meta';
+  if (line.startsWith('@@')) return 'hunk';
+  if (line.startsWith('+')) return 'add';
+  if (line.startsWith('-')) return 'del';
+  return 'ctx';
+}
+
+const DIFF_MAX_LINES = 800;
+
+function renderDiffToHtml(diffText) {
+  const lines = String(diffText).split('\n');
+  if (lines.length > DIFF_MAX_LINES) {
+    lines.length = DIFF_MAX_LINES;
+    lines.push(`… diff truncated at ${DIFF_MAX_LINES} lines`);
+  }
+  let html = '';
+  for (const line of lines) {
+    const cls = classifyDiffLine(line);
+    html += `<span class="diff-line diff-${cls}">${escapeHtml(line)}</span>\n`;
+  }
+  return html;
+}
+
+// Show an edit's unified diff in the dock file pane. Falls back to the
+// plain file view when no diff arrived with the event.
+function showEditDiffInDock(path, diffText) {
+  if (!diffText) return;
+  dockOpenFile(path || 'edited', true);
+  $('#dock-filepath').textContent = path || '(edited)';
+  $('#dock-filecode').innerHTML = renderDiffToHtml(diffText);
+  $('#dock-filegutter').textContent = '';
 }
 
 function agentTouchedFile(evt) {
