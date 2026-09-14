@@ -301,6 +301,7 @@ async function init() {
 
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newChat(); }
+    if (e.altKey && (e.metaKey || e.ctrlKey) && e.code === 'KeyF') { e.preventDefault(); dockFlip(); }
   });
 
   $('#toggle-cli').addEventListener('click', () => {
@@ -2734,6 +2735,7 @@ function setupStudio() {
 /* The workspace root is granted natively (main-process dialog → POST fs/root
    with X-Xavani-Native). A renderer POST to fs/root is refused by design. */
 async function chooseWorkspaceRoot() {
+  wbDispatch({ type: 'transition', value: true });
   try {
     const res = await window.xavaniDesktop.chooseWorkspace();
     if (!res || res.cancelled) return null;
@@ -2746,6 +2748,7 @@ async function chooseWorkspaceRoot() {
     renderTree(res.root);
     return res;
   } catch (err) { treeError(String(err)); return null; }
+  finally { wbDispatch({ type: 'transition', value: false }); }
 }
 
 async function setWorkspaceRoot() {
@@ -2755,6 +2758,7 @@ async function setWorkspaceRoot() {
 function workspaceRequired(d) { return !!d && d.error === 'Workspace required'; }
 
 async function loadWorkspaceRoot() {
+  wbDispatch({ type: 'transition', value: true });
   try {
     const res = await dapi('/desktop/api/fs/root');
     const d = await res.json();
@@ -2770,6 +2774,7 @@ async function loadWorkspaceRoot() {
     wbSwitchWorkspace(wbWorkspaceId());
     renderTree(d.root);
   } catch { treeError('Backend unreachable'); }
+  finally { wbDispatch({ type: 'transition', value: false }); }
 }
 
 function treeError(msg) { $('#file-tree').innerHTML = `<div class="empty">${escapeHtml(msg)}</div>`; }
@@ -3068,6 +3073,7 @@ function wbRender() {
   const follow = $('#wb-status-follow');
   if (follow) follow.textContent = `follow ${wb.follow ? 'on' : 'paused'}`;
   renderDockHead();
+  updateFlipControl();
 }
 
 // Only the switched-to workspace's layout comes back; a stored size is
@@ -3092,6 +3098,8 @@ function setupWorkbench() {
   wbBindResize($('#wb-resize-bottom'), 'bottom', 'y');
   const reset = $('#wb-reset-layout');
   if (reset) reset.addEventListener('click', () => wbDispatch({ type: 'reset-layout' }));
+  const flipBtn = $('#dock-flip');
+  if (flipBtn) flipBtn.addEventListener('click', () => dockFlip());
 
   let resizeTimer = null;
   window.addEventListener('resize', () => {
@@ -3136,6 +3144,7 @@ const dockState = {
   fileTabs: [],
   active: 'preview',
   loadSeq: 0,
+  scrollTops: {},
   dirtyRun: false,
   // follow and the tab group live in the reducer only (Code Pack K).
   get follow() { return wb.follow; },
@@ -3269,6 +3278,28 @@ function syncEditorHlScroll() {
   hl.scrollLeft = ed.scrollLeft;
 }
 
+// The flip control reflects canFlip: enabled with a changed file, calmly
+// disabled ("No changed file") otherwise, and locked during a workspace
+// transition.
+function updateFlipControl() {
+  const el = $('#dock-flip');
+  if (!el) return;
+  const can = WB.canFlip(wb);
+  el.classList.toggle('is-disabled', !can);
+  el.setAttribute('aria-disabled', can ? 'false' : 'true');
+  el.title = !wb.lastFile
+    ? 'No changed file'
+    : (wb.transitioning ? 'Flip is disabled during a workspace change' : 'Flip between Preview and the last changed file (⌘⌥F)');
+}
+
+// Restart the 120 ms opacity fade on the dock body (reduced motion removes it).
+function wbFade(el) {
+  if (!el) return;
+  el.classList.remove('wb-flip-fade');
+  void el.offsetWidth;
+  el.classList.add('wb-flip-fade');
+}
+
 // The dock head tabs (Preview / To-Do) render from the reducer's tab group,
 // so the highlight can never disagree with the dock's state.
 function renderDockHead() {
@@ -3314,12 +3345,19 @@ function renderDockTabs() {
 }
 
 function setDockTab(id) {
+  const prev = dockState.active;
+  // Remember the file pane's scroll before leaving it.
+  if (prev && prev !== 'preview' && prev !== 'todo') {
+    const sc = $('#dock-filescroll');
+    if (sc) dockState.scrollTops[prev] = sc.scrollTop;
+  }
   dockState.active = id;
   const isPreview = id === 'preview';
   const isTodo = id === 'todo';
   // The tab group is the reducer's; To-Do is a legacy extra view.
   if (isPreview) wbDispatch({ type: 'dock-tab', tab: 'preview' });
   else if (!isTodo) wbDispatch({ type: 'dock-tab', tab: 'files' });
+  if (prev !== id) wbFade($('.dock-body'));
   $('#dock-webview').style.display = (isPreview && !isTodo) ? '' : 'none';
   $('#dock-todoview').classList.toggle('hidden', !isTodo);
   $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo);
@@ -3415,7 +3453,7 @@ async function loadFileIntoDock(path) {
     const n = d.content.split('\n').length;
     for (let i = 1; i <= n; i++) g += i + '\n';
     $('#dock-filegutter').textContent = g;
-    $('#dock-filescroll').scrollTop = 0;
+    $('#dock-filescroll').scrollTop = dockState.scrollTops[path] || 0;
   } catch (err) {
     if (seq === dockState.loadSeq) { $('#dock-filecode').textContent = String(err); $('#dock-filegutter').textContent = ''; }
   }
@@ -3512,14 +3550,21 @@ function dockRunEnded() {
   }
 }
 
+// The /flip command and the ⌘⌥F chord: toggle preview ⇄ the last changed
+// file through the reducer, never reopening a pane the user closed.
 function dockFlip() {
-  if (!state.dockUserClosed && !wb.dockOpen) $('#dock-toggle').click();
-  state.dockUserClosed = false;
-  if (dockState.active === 'preview') {
-    if (dockState.fileTabs.length) setDockTab(dockState.fileTabs[0].path);
-  } else {
-    setDockTab('preview');
+  if (state.dockUserClosed) return;
+  if (!wb.dockOpen) {
+    if (wb.transitioning) { toast('Flip is disabled during a workspace change'); return; }
+    wbDispatch({ type: 'open-dock' });
   }
+  if (!WB.canFlip(wb)) {
+    toast(wb.lastFile ? 'Flip is disabled during a workspace change' : 'No changed file');
+    return;
+  }
+  const next = wbDispatch({ type: 'flip' });
+  if (next.dockTab === 'files' && next.lastFile) dockOpenFile(next.lastFile, true);
+  else setDockTab('preview');
 }
 
 function setupDockTabs() {

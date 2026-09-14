@@ -195,3 +195,10 @@ body.wb-resizing { user-select: none; }
   #app [data-region="agent"],
   #app [data-region="bottom"] { display: none; }
 }
+
+/* ---------- flip transition ----------
+   The preview ⇄ files swap fades over 120 ms — opacity only, never a
+   rotating page animation. The reduced-motion block above removes it. */
+.wb-flip-fade { animation: wb-flip-fade var(--workbench-motion) ease; }
+@keyframes wb-flip-fade { from { opacity: 0; } to { opacity: 1; } }
+#dock-flip.is-disabled { opacity: 0.55; }

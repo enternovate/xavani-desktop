@@ -36,7 +36,7 @@
   function initialWorkbench(workspaceId) {
     return {
       workspaceId, dockOpen: true, dockTab: 'preview', follow: true,
-      lastFile: null, lastFileSeq: 0, dirty: false,
+      lastFile: null, lastFileSeq: 0, dirty: false, transitioning: false,
       explorerWidth: 240, agentWidth: 360, bottomHeight: 220,
       layouts: {},
     };
@@ -95,6 +95,12 @@
     return next;
   }
 
+  // Flip needs an open dock, a changed file to return to, and no workspace
+  // transition in flight.
+  function canFlip(state) {
+    return Boolean(state && state.dockOpen && state.lastFile && !state.transitioning);
+  }
+
   function reduceWorkbench(state, action) {
     if (!action || typeof action !== 'object') return state;
 
@@ -120,8 +126,11 @@
       });
     }
     if (action.type === 'flip') {
-      if (!state.dockOpen || !state.lastFile) return state;
+      if (!canFlip(state)) return state;
       return Object.assign({}, state, { dockTab: state.dockTab === 'preview' ? 'files' : 'preview' });
+    }
+    if (action.type === 'transition') {
+      return Object.assign({}, state, { transitioning: Boolean(action.value) });
     }
     if (action.type === 'resize') {
       var key = PANE_DIMS[action.pane];
@@ -145,7 +154,7 @@
   }
 
   var api = {
-    initialWorkbench, reduceWorkbench, clampLayout,
+    initialWorkbench, reduceWorkbench, clampLayout, canFlip,
     LAYOUT_DEFAULTS, LAYOUT_RANGES, WORKBENCH_TOKENS, WORKBENCH_REGIONS,
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
