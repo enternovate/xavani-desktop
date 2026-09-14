@@ -114,12 +114,15 @@ def _is_credential_name(name: str) -> bool:
 
 
 def _is_control_path(parts: tuple[str, ...]) -> bool:
-    if any(part in _CONTROL_DIRS for part in parts):
+    # Case-insensitive: helper filesystems (APFS/HFS+/NTFS) map ".GIT" onto
+    # ".git", so a case variant must not slip past the denylists (corpus F1).
+    lowered = tuple(part.lower() for part in parts)
+    if any(part in _CONTROL_DIRS for part in lowered):
         return True
     return any(
-        tuple(parts[index:index + 2]) == sequence
+        tuple(lowered[index:index + 2]) == sequence
         for sequence in _CONTROL_SEQUENCES
-        for index in range(len(parts))
+        for index in range(len(lowered))
     )
 
 
@@ -145,23 +148,26 @@ def require_root(root: Any) -> Path:
     return Path(os.path.realpath(path))
 
 
-def _relative_parts(target: Path, root_real: Path, root_given: Path) -> tuple[str, ...]:
-    """Path parts below the root, tolerating an un-normalised root spelling.
+def _relative_parts(
+    target: Path, resolved: Path, root_real: Path, root_given: Path
+) -> tuple[tuple[str, ...], str]:
+    """Parts of the candidate below the root, plus the spelling that produced them.
 
     The candidate may be spelled with a symlinked prefix (macOS ``/var`` versus
     ``/private/var``).  The lexical spelling is preferred so the symlink walk
-    sees every component; the resolved spelling is the fallback, and it is only
-    reached after containment against the realpath'd root has already held.
+    sees every component.  When the spelling is not expressible relative to the
+    granted root, the realpath spelling is used instead — never an empty parts
+    tuple, which previously let an aliased spelling skip every denylist
+    (adversarial corpus finding F2).
     """
-    for base in (root_real, root_given):
-        try:
-            return target.relative_to(base).parts
-        except ValueError:
-            continue
     try:
-        return target.relative_to(root_real).parts
+        return target.relative_to(root_given).parts, "lexical"
     except ValueError:
-        return ()
+        pass
+    try:
+        return resolved.relative_to(root_real).parts, "real"
+    except ValueError:
+        raise WorkspaceDenied("The path leaves the workspace.")
 
 
 def resolve_workspace_path(
@@ -170,6 +176,7 @@ def resolve_workspace_path(
     *,
     write: bool = False,
     allow_root: bool = False,
+    root_given: Any = None,
 ) -> Path:
     """Resolve ``candidate`` inside ``root`` or raise a boundary refusal.
 
@@ -179,7 +186,7 @@ def resolve_workspace_path(
     directories; credential-looking files are refused for reads and writes.
     """
     root_real = require_root(root)
-    root_given = Path(str(root)).expanduser()
+    root_given_path = Path(str(root_given if root_given is not None else root)).expanduser()
     raw = candidate
     if not isinstance(raw, str) or not raw.strip() or "\x00" in raw:
         raise WorkspaceInputError("A workspace path is required.")
@@ -195,7 +202,7 @@ def resolve_workspace_path(
     if resolved != root_real and not resolved.is_relative_to(root_real):
         raise WorkspaceDenied("The path leaves the workspace.")
 
-    parts = _relative_parts(target, root_real, root_given)
+    parts, _spelling = _relative_parts(target, resolved, root_real, root_given_path)
     if write and _is_control_path(parts):
         raise WorkspaceDenied("The path contains protected data.")
     for part in parts:
@@ -241,6 +248,7 @@ class WorkspaceBoundary:
     def __init__(self, root: Any = None) -> None:
         self._lock = threading.RLock()
         self._root: Path | None = None
+        self._root_given: Path | None = None
         self._generation = 0
         self._grants: dict[str, int] = {}
         if root is not None:
@@ -296,6 +304,7 @@ class WorkspaceBoundary:
             raise WorkspaceInputError(f"not a directory: {path}")
         with self._lock:
             self._root = resolved
+            self._root_given = path
             self._generation += 1
             self._grants = {}
         return resolved
@@ -307,6 +316,7 @@ class WorkspaceBoundary:
     def clear(self) -> None:
         with self._lock:
             self._root = None
+            self._root_given = None
             self._generation += 1
             self._grants = {}
 
@@ -334,7 +344,15 @@ class WorkspaceBoundary:
 
     def resolve(self, raw: Any, *, write: bool = False, allow_root: bool = False) -> Path:
         """Resolve a route path against the current root."""
-        return resolve_workspace_path(self.require_root(), raw, write=write, allow_root=allow_root)
+        with self._lock:
+            root_given = self._root_given
+        return resolve_workspace_path(
+            self.require_root(),
+            raw,
+            write=write,
+            allow_root=allow_root,
+            root_given=root_given,
+        )
 
     def permits(self, path: Any, *, write: bool = False) -> bool:
         """True when ``path`` (an absolute path already inside the root) passes."""
