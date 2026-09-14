@@ -23,6 +23,7 @@ import socket
 import sys
 import time
 import tomllib
+import warnings
 from pathlib import Path
 
 STARTED_AT = time.time()
@@ -187,6 +188,32 @@ def build_desktop_app(api_port: int, secret: str):
         from desktop_auth import desktop_auth
 
     routes = web.RouteTableDef()
+
+    try:
+        from backend.workspace_paths import (
+            NATIVE_GRANT_HEADER,
+            NATIVE_GRANT_SOURCE,
+            WORKSPACE_ERRORS,
+            WORKSPACE_REQUIRED,
+            WorkspaceBoundary,
+            native_grant,
+        )
+    except ImportError:
+        # Launched as a script (Electron passes an absolute path): backend/
+        # itself is sys.path[0], so the package form does not resolve.
+        from workspace_paths import (  # type: ignore[no-redef]
+            NATIVE_GRANT_HEADER,
+            NATIVE_GRANT_SOURCE,
+            WORKSPACE_ERRORS,
+            WORKSPACE_REQUIRED,
+            WorkspaceBoundary,
+            native_grant,
+        )
+
+    # One boundary per desktop app: the single selected workspace root.  It
+    # starts empty — only a native grant (POST /desktop/api/fs/root with the
+    # X-Xavani-Native header) may set it.
+    boundary = WorkspaceBoundary()
 
     CLI_COMMANDS = [
         {"name": "doctor", "args": ["doctor"], "desc": "Check dependencies, config and health"},
@@ -867,10 +894,10 @@ def build_desktop_app(api_port: int, secret: str):
         ops = body.get("ops")
         if not isinstance(ops, list) or not ops:
             return web.json_response({"error": "ops list required"}, status=400)
-        root_value = _ws_state_path_root()
-        if not root_value:
-            root_value = str(Path.home())
-        root = Path(str(root_value)).expanduser()
+        try:
+            root = boundary.require_root()
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         brief_lines: list[str] = []
         unresolved: list[dict] = []
         searched = 0
@@ -1210,60 +1237,84 @@ def build_desktop_app(api_port: int, secret: str):
 
     # ---------------- studio IDE: filesystem endpoints ----------------
     #
-    # All paths are resolved and MUST stay inside the user's home directory.
-    # The server binds to 127.0.0.1 only; this guard is defence-in-depth so a
-    # stray page can't probe arbitrary absolute paths through the desktop API.
-    _HOME = Path.home().resolve()
+    # Every path is resolved through the workspace boundary
+    # (backend/workspace_paths.py).  A path is accepted only when it realpaths
+    # inside the single selected workspace root, so a home-prefix check no
+    # longer decides access.  Control directories (.git, .ssh, .aws, .gnupg,
+    # .xavani, .hermes, .config/xavani) refuse writes; credential-looking files
+    # refuse reads and writes.
+    #
+    # The root itself comes from a native grant only: POST /desktop/api/fs/root
+    # requires the shared secret in the X-Xavani-Native header, which the
+    # renderer's webRequest injector never adds (it adds Authorization).  A
+    # renderer-originated request therefore cannot create a grant, and a raw
+    # HTTP caller without the secret is rejected by the auth middleware (401)
+    # or by the grant check (403).
+    #
+    # Status conventions:
+    #   428  no workspace granted yet — {"error": "Workspace required"}
+    #   400  malformed path, or a parent-traversal ("..") attempt
+    #   403  outside the root, control dir write, credential file, symlink,
+    #        or a non-native grant attempt
     _TREE_SKIP = {"node_modules", ".git", "__pycache__", ".venv", "venv",
                   "dist-electron", ".cache", ".DS_Store"}
 
     def _ws_state_path() -> Path:
         return _xavani_home() / "desktop-workspace.json"
 
-    def _safe_path(raw: str) -> Path:
-        p = Path(str(raw)).expanduser()
-        if not p.is_absolute():
-            p = _ws_state_path_root() / p
-        rp = p.resolve()
-        if not str(rp).startswith(str(_HOME)):
-            raise ValueError(f"path outside home directory: {rp}")
-        return rp
-
-    def _ws_state_path_root() -> Path:
-        try:
-            data = json.loads(_ws_state_path().read_text(encoding="utf-8"))
-            root = _safe_path(data.get("root", ""))
-            if root.is_dir():
-                return root
-        except Exception:
-            pass
-        fallback = _HOME / "Desktop" / "enternovate-builds"
-        return fallback if fallback.is_dir() else _HOME
+    def _fs_error(exc: Exception) -> "web.Response":
+        return web.json_response({"error": str(exc)}, status=getattr(exc, "status", 403))
 
     @routes.get("/desktop/api/fs/root")
     async def fs_root_get(_request: "web.Request") -> "web.Response":
-        return web.json_response({"root": str(_ws_state_path_root())})
+        snapshot = boundary.snapshot()
+        if not snapshot["granted"]:
+            return web.json_response(
+                {"error": WORKSPACE_REQUIRED, "root": "", "granted": False}, status=428)
+        return web.json_response(snapshot)
 
     @routes.post("/desktop/api/fs/root")
     async def fs_root_set(request: "web.Request") -> "web.Response":
         try:
             body = await request.json()
-            root = _safe_path(body.get("root", ""))
-            if not root.is_dir():
-                return web.json_response({"error": f"not a directory: {root}"}, status=400)
-            _ws_state_path().parent.mkdir(parents=True, exist_ok=True)
-            _ws_state_path().write_text(json.dumps({"root": str(root)}), encoding="utf-8")
-            return web.json_response({"ok": True, "root": str(root)})
-        except ValueError as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        # A grant entry point: the secret must arrive in X-Xavani-Native.  The
+        # renderer's webRequest injector adds Authorization only, and the
+        # renderer never holds the raw secret, so an XHR from the page cannot
+        # reach this branch.
+        try:
+            root = native_grant(
+                boundary,
+                body.get("root", ""),
+                header_value=request.headers.get(NATIVE_GRANT_HEADER),
+                secret=secret,
+            )
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
+        # Persist the record for the shell's next launch.  This file is a
+        # hint, not a grant: the boundary still starts empty every run.
+        try:
+            _ws_state_path().parent.mkdir(parents=True, exist_ok=True)
+            _ws_state_path().write_text(
+                json.dumps({"root": str(root), "granted_by": NATIVE_GRANT_SOURCE}),
+                encoding="utf-8")
+        except Exception:
+            pass
+        return web.json_response({
+            "ok": True,
+            "root": str(root),
+            "granted": True,
+            "generation": boundary.generation,
+        })
 
     @routes.get("/desktop/api/fs/tree")
     async def fs_tree(request: "web.Request") -> "web.Response":
-        raw = request.query.get("path") or str(_ws_state_path_root())
+        raw = request.query.get("path") or "."
         try:
-            base = _safe_path(raw)
+            base = boundary.resolve(raw, allow_root=True)
             if not base.exists():
                 return web.json_response({"error": f"not found: {base}"}, status=404)
             entries = []
@@ -1283,6 +1334,8 @@ def build_desktop_app(api_port: int, secret: str):
             except PermissionError:
                 pass
             return web.json_response({"path": str(base), "entries": entries})
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -1291,7 +1344,7 @@ def build_desktop_app(api_port: int, secret: str):
     @routes.get("/desktop/api/fs/file")
     async def fs_file(request: "web.Request") -> "web.Response":
         try:
-            path = _safe_path(request.query.get("path", ""))
+            path = boundary.resolve(request.query.get("path", ""))
             if not path.is_file():
                 return web.json_response({"error": f"not a file: {path}"}, status=404)
             size = path.stat().st_size
@@ -1303,6 +1356,8 @@ def build_desktop_app(api_port: int, secret: str):
             except UnicodeDecodeError:
                 return web.json_response({"error": "binary file — not editable here"}, status=415)
             return web.json_response({"path": str(path), "content": text, "size": size})
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -1310,13 +1365,15 @@ def build_desktop_app(api_port: int, secret: str):
     async def fs_write(request: "web.Request") -> "web.Response":
         try:
             body = await request.json()
-            path = _safe_path(body.get("path", ""))
+            path = boundary.resolve(body.get("path", ""), write=True)
             content = str(body.get("content", ""))
             if len(content.encode("utf-8")) > _MAX_FILE_BYTES:
                 return web.json_response({"error": "content too large"}, status=413)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(content, encoding="utf-8")
             return web.json_response({"ok": True, "path": str(path), "bytes": len(content.encode("utf-8"))})
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
@@ -1390,20 +1447,22 @@ def build_desktop_app(api_port: int, secret: str):
         name = request.query.get("name", "").strip()
         if not name or "/" in name or "\\" in name or ".." in name:
             return web.json_response({"error": "bad name"}, status=400)
-        root = _ws_state_path_root()
-        matches = sorted(p for p in root.rglob(name) if p.is_file())
+        try:
+            root = boundary.require_root()
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        # The boundary filters the walk: symlinks and credential files never
+        # appear in a result, even when the name matches.
+        matches = sorted(p for p in root.rglob(name) if p.is_file() and boundary.permits(p))
         return web.json_response({"path": str(matches[0]) if matches else None, "count": len(matches)})
 
     @routes.post("/desktop/api/fs/write-b64")
     async def fs_write_b64(request: "web.Request") -> "web.Response":
         try:
             body = await request.json()
-            path = _safe_path(body.get("path", ""))
             import base64 as _b64
 
             raw = _b64.b64decode(str(body.get("data_b64", "")))
-        except ValueError as exc:
-            return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": f"bad payload: {exc}"}, status=400)
         if not raw:
@@ -1411,12 +1470,17 @@ def build_desktop_app(api_port: int, secret: str):
         if len(raw) > 20 * 1024 * 1024:
             return web.json_response({"error": "over 20MB"}, status=413)
         try:
+            path = boundary.resolve(body.get("path", ""), write=True)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
                 backup = path.with_suffix(path.suffix + ".bak")
                 backup.write_bytes(path.read_bytes())
             path.write_bytes(raw)
             return web.json_response({"ok": True, "path": str(path), "bytes": len(raw)})
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
 
@@ -1425,7 +1489,7 @@ def build_desktop_app(api_port: int, secret: str):
         try:
             body = await request.json()
             op = str(body.get("op", ""))
-            path = _safe_path(body.get("path", ""))
+            path = boundary.resolve(body.get("path", ""), write=True)
             if op == "mkdir":
                 path.mkdir(parents=True, exist_ok=True)
             elif op == "newfile":
@@ -1436,13 +1500,15 @@ def build_desktop_app(api_port: int, secret: str):
                 else:
                     path.unlink(missing_ok=True)
             elif op == "rename":
-                dest = _safe_path(body.get("to", ""))
+                dest = boundary.resolve(body.get("to", ""), write=True)
                 path.rename(dest)
             else:
                 return web.json_response({"error": f"unknown op: {op}"}, status=400)
             return web.json_response({"ok": True, "op": op, "path": str(path)})
         except FileExistsError:
             return web.json_response({"error": "already exists"}, status=409)
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
@@ -1450,6 +1516,13 @@ def build_desktop_app(api_port: int, secret: str):
 
     app = web.Application(middlewares=[desktop_auth(secret)])
     app.add_routes(routes)
+    # Expose the boundary so the shell and the tests can inspect or prime the
+    # selected workspace without going through the HTTP grant route.  A plain
+    # string key stays stable across aiohttp releases; the AppKey hint is not
+    # worth changing the accessor.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*AppKey instances for keys.*")
+        app["workspace"] = boundary
     return app
 
 
