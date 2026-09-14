@@ -8,19 +8,16 @@ every tool, skill, memory, cron job, credential pool, and provider the CLI has, 
 the agent's own HTTP API server with token streaming.
 
 ![platforms](https://img.shields.io/badge/platform-macOS%20%7C%20Windows-blue)
-![engine](https://img.shields.io/badge/engine-xavani--agent%200.1.x-5e6ad2)
+![version](https://img.shields.io/badge/version-0.3.0-5e6ad2)
 
 ## Highlights
 
 - **Version-aligned with the CLI** — desktop and xavani-agent ship the same version number
-  (0.2.0). Every CLI feature lands here too; `scripts/check_parity.sh` plus the weekly
+  (0.3.0). Every CLI feature lands here too; `scripts/check_parity.sh` plus the weekly
   `cli-parity` workflow fail loudly when a new CLI command is not yet surfaced in the app.
-- **v0.2.0 — CLI parity** — every engine command in composer autocomplete, first-run
-  setup wizard (provider → model → toolsets → history import → workspace), full Settings view
-  (skins, models, effort/fast mode, toolsets, MCP servers, profiles, display, updates),
-  Effort + Fast chips in the topbar, GitHub release update badge, media visual edit
-  (rotate/flip/recolor images and SVG), and voice input with model transcription.
-  See `docs/release-notes-0.2.0.md`.
+- **v0.3.0 — Everyday Carry** — persistent tasks and reminders, profile switching,
+  richer settings, additional import sources, a skills marketplace, cron creation,
+  Studio editing and two-way visual preview editing.
 - **Full CLI capability** — same engine, same tools, same `~/.xavani` home. Sessions created in
   the app are visible to the CLI and vice versa.
 - **Token streaming** — replies stream live via SSE (`message.delta`), with reasoning blocks,
@@ -57,8 +54,8 @@ The engine runs unmodified — the desktop app is a consumer of its public API s
 
 ### macOS (Apple Silicon)
 
-Download `Xavani-<version>-macos-arm64.dmg` from
-[Releases](../../releases), open it, drag **Xavani** to Applications.
+Download [Xavani-0.3.0-macos-arm64.dmg](https://github.com/enternovate/xavani-desktop/releases/download/v0.3.0/Xavani-0.3.0-macos-arm64.dmg),
+open it, then drag **Xavani** to Applications.
 
 Unsigned build notice: first launch needs right-click → **Open** (Gatekeeper), because the
 binary is ad-hoc signed. With a Developer ID certificate this goes away.
@@ -69,8 +66,13 @@ On first run the app uses `~/.xavani/`. If you've never configured a model, eith
 
 ### Windows (x64)
 
-Download `Xavani-<version>-windows-x64-setup.exe` from [Releases](../../releases) and run it.
+Download [Xavani-0.3.0-windows-x64-setup.exe](https://github.com/enternovate/xavani-desktop/releases/download/v0.3.0/Xavani-0.3.0-windows-x64-setup.exe) and run it.
 SmartScreen will warn on unsigned builds — "More info" → "Run anyway".
+
+Portable ZIP: [Xavani-0.3.0-win.zip](https://github.com/enternovate/xavani-desktop/releases/download/v0.3.0/Xavani-0.3.0-win.zip)
+
+Verified downloads and SHA-256 checksums are also published at
+https://enternovate.co.za/xavani-desktop#download.
 
 ## Building from source
 
@@ -113,7 +115,8 @@ XAVANI_DESKTOP_TEST='{"script":"document.getElementById(\"input\").value=\"hi\";
 
 Nothing leaves your machine except model API calls made by the engine itself, under your own
 API keys. The backend listens on loopback only and refuses non-local binding without an API key
-(inherited engine behavior). No analytics, no phone-home.
+(inherited engine behavior). The app sends no product telemetry. It performs an anonymous
+GitHub Releases request to check whether an update is available.
 
 ## License
 

@@ -8,3 +8,4 @@ reqs.txt
 backend/__pycache__/
 __pycache__/
 *.pyc
+.hermes/
