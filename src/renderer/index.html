@@ -204,6 +204,7 @@
         <div class="dock-tabs-head">
           <button class="dock-tab active" id="tab-preview" data-docktab="preview">Preview</button>
           <button class="dock-tab" id="tab-todo" data-docktab="todo">To-Do</button>
+          <button class="dock-tab" id="tab-business" data-docktab="business">Business</button>
         </div>
         <button id="dock-flip" class="btn ghost sm" title="Flip between Preview and the last changed file (⌘⌥F)" aria-disabled="false">⇄ Preview / Files</button>
         <input id="dock-url" class="mono" placeholder="http://localhost:3000" value="http://localhost:3000">
@@ -221,6 +222,20 @@
           </div>
           <div id="todo-hint" class="todo-hint">Drag to prioritise. Top item = highest priority.</div>
           <div id="todo-list"></div>
+        </div>
+        <div id="dock-businessview" class="hidden">
+          <div class="biz-controls">
+            <select id="biz-workflow" aria-label="Workflow"></select>
+            <input id="biz-period" class="mono" placeholder="period e.g. 2026-Q2" spellcheck="false">
+            <input id="biz-currency" class="mono" placeholder="currency e.g. ZAR" spellcheck="false">
+            <button id="biz-run" class="btn primary sm" disabled>Run workflow</button>
+          </div>
+          <div id="biz-missing" class="biz-missing hidden"></div>
+          <div class="biz-section"><div class="biz-section-head">Sources</div><div id="biz-sources" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Drafts</div><div id="biz-drafts" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Checks</div><div id="biz-checks" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Approvals</div><div id="biz-approvals" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Outstanding work</div><div id="biz-outstanding" class="biz-list"></div></div>
         </div>
         <div id="dock-fileview" class="hidden">
           <div id="dock-filepath" class="mono"></div>
@@ -296,6 +311,7 @@
   <script src="vendor/xterm-addon-fit.js"></script>
   <script src="run-state.js"></script>
   <script src="workbench-state.js"></script>
+  <script src="business-view.js"></script>
   <script src="vendor/monaco.bundle.js"></script>
   <script src="editor-adapter.js"></script>
   <script src="app.js"></script>

@@ -1488,6 +1488,150 @@ def build_desktop_app(api_port: int, secret: str):
         except Exception as exc:
             return web.json_response({"available": False, "diagnostics": [], "error": str(exc)})
 
+    # ---------------- business workspace view (task 21) ----------------
+    # The view renders exactly what these routes can serve: workflow
+    # capability is decided here, approvals come from the real operator
+    # queue (task 19), and no control can claim more than that.
+
+    _BUSINESS_WORKFLOWS = [
+        {"id": "B01", "name": "Finance analysis", "needs": ["period", "currency"], "catalog": "finance"},
+        {"id": "B02", "name": "Invoice review", "needs": ["currency"], "catalog": "invoices"},
+        {"id": "B03", "name": "Daily operations", "needs": [], "catalog": "daily"},
+        {"id": "B04", "name": "Inbox and support", "needs": [], "catalog": "inbox"},
+        {"id": "B05", "name": "Meetings", "needs": [], "catalog": "meetings"},
+        {"id": "B06", "name": "Sales and marketing", "needs": [], "catalog": "sales"},
+        {"id": "B07", "name": "People and administration", "needs": [], "catalog": "people"},
+        {"id": "B08", "name": "Procurement and inventory", "needs": [], "catalog": "procurement"},
+        {"id": "B09", "name": "Legal and compliance support", "needs": [], "catalog": "compliance"},
+        {"id": "B10", "name": "Engineering and design", "needs": [], "catalog": "engineering"},
+        {"id": "B11", "name": "Executive reporting", "needs": ["period", "currency"], "catalog": "executive"},
+        {"id": "B12", "name": "Safety and incidents", "needs": [], "catalog": "incidents"},
+    ]
+
+    @routes.get("/desktop/api/business/state")
+    async def business_state(_request: "web.Request") -> "web.Response":
+        try:
+            root = boundary.require_root()
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        payload = {
+            "workflows": _BUSINESS_WORKFLOWS,
+            "sources": None, "drafts": None,
+            "checks": [], "approvals": [], "outstanding": [],
+        }
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+
+            file_state = {}
+            state_path = _Path(root) / ".xavani-business" / "state.json"
+            if state_path.is_file():
+                file_state = _json.loads(state_path.read_text(encoding="utf-8")) or {}
+            for key in ("sources", "drafts", "checks", "outstanding"):
+                if isinstance(file_state.get(key), list):
+                    payload[key] = file_state[key]
+            if payload["sources"] is None:
+                entries = []
+                for name in sorted(os.listdir(root)):
+                    if name.startswith("."):
+                        continue
+                    full = os.path.join(root, name)
+                    entries.append({
+                        "name": name,
+                        "access": "Granted" if os.access(full, os.R_OK) else "Unavailable",
+                    })
+                payload["sources"] = entries
+            if payload["drafts"] is None:
+                drafts_dir = _Path(root) / "drafts"
+                payload["drafts"] = (
+                    [] if not drafts_dir.is_dir()
+                    else [{"name": p.name, "path": str(p)} for p in sorted(drafts_dir.iterdir()) if p.is_file()]
+                )
+            # Approvals: the real operator queue (task 19) when importable.
+            try:
+                from xavani_operator.approval_queue import ApprovalQueue
+                from xavani_operator.state import OperatorState
+
+                queue = ApprovalQueue(OperatorState())
+                records = []
+                for approval in queue.list_actions():
+                    req = approval.request or {}
+                    records.append({
+                        "id": approval.id,
+                        "operation": req.get("operation"),
+                        "target": req.get("target"),
+                        "recipient": (req.get("payload") or {}).get("recipient"),
+                        "state": approval.state,
+                        "consumed": approval.consumed,
+                    })
+                if records or not file_state.get("approvals"):
+                    payload["approvals"] = records
+            except Exception:
+                payload["approvals"] = file_state.get("approvals") or []
+            return web.json_response(payload)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)})
+
+    @routes.post("/desktop/api/business/decide")
+    async def business_decide(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        approval_id = str(body.get("id") or "")
+        decision = str(body.get("decision") or "")
+        if not approval_id or decision not in ("approve", "deny"):
+            return web.json_response({"error": "id and decision are required"}, status=400)
+        try:
+            import time as _time
+
+            from xavani_operator.approval_queue import ApprovalQueue
+            from xavani_operator.state import OperatorState
+
+            queue = ApprovalQueue(OperatorState())
+            if decision == "approve":
+                record = queue.get_action(approval_id)
+                if record is None:
+                    return web.json_response({"error": "unknown approval"}, status=404)
+                if record.state == "draft":
+                    queue.request_approval(approval_id)
+                result = queue.approve_action(approval_id, now=_time.time())
+            else:
+                result = queue.deny_action(approval_id, now=_time.time())
+            if result is None:
+                return web.json_response({"error": "unknown approval"}, status=404)
+            return web.json_response({"ok": True, "state": result.state})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)})
+
+    @routes.post("/desktop/api/business/select")
+    async def business_select(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        workflow_id = str(body.get("workflow_id") or "").upper()
+        period = str(body.get("period") or "").strip()
+        currency = str(body.get("currency") or "").strip()
+        spec = next((w for w in _BUSINESS_WORKFLOWS if w["id"] == workflow_id), None)
+        if spec is None:
+            return web.json_response({"error": f"unknown workflow {workflow_id!r}"}, status=404)
+        values = {"period": period, "currency": currency}
+        missing = [need for need in spec["needs"] if not values.get(need)]
+        if missing:
+            return web.json_response({"error": f"Blocked: missing {' and '.join(missing)}."})
+        try:
+            from agent.skill_commands import build_workflow_skill_message
+
+            message = build_workflow_skill_message(spec["catalog"], mode="ask")
+        except Exception as exc:
+            return web.json_response({"error": f"workflow load failed: {exc}"})
+        if not message:
+            return web.json_response({"error": "the workflow has nothing to load"})
+        return web.json_response({"ok": True, "workflow_id": spec["id"], "message": message})
+
     # ---------------- voice transcription ----------------
 
     def _read_env_key(name: str) -> str:

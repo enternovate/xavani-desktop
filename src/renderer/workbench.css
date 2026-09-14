@@ -225,3 +225,27 @@ body.wb-resizing { user-select: none; }
 }
 .problem-item:hover,
 .problem-item:focus-visible { background: rgba(105, 173, 255, 0.16); outline: none; }
+
+/* ---------- business view (task 21) ---------- */
+
+#dock-businessview { display: flex; flex-direction: column; gap: 6px; overflow: auto; padding: 8px; height: 100%; }
+#dock-businessview.hidden { display: none; }
+.biz-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.biz-controls select,
+.biz-controls input {
+  background: var(--workbench-panel); color: var(--workbench-text);
+  border: 1px solid var(--workbench-border); border-radius: var(--workbench-radius);
+  padding: 3px 6px; font-size: 11px;
+}
+.biz-missing { color: #f0b429; font-size: 11px; }
+.biz-missing.hidden { display: none; }
+.biz-section-head {
+  color: var(--workbench-muted); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.04em; margin: 6px 0 2px;
+}
+.biz-list { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.biz-item { padding: 2px 6px; border-radius: var(--workbench-radius); }
+.biz-item.unavailable,
+.biz-item.denied { color: #ff8f8f; }
+.biz-item.failed { color: #ffc46b; }
+.biz-decision { margin-left: 6px; }

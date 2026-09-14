@@ -3517,15 +3517,160 @@ function wbFade(el) {
   el.classList.add('wb-flip-fade');
 }
 
+/* ---------------- business view (R2 Task 21) ----------------
+   The Business tab renders the backend's business state; every control
+   reflects what the backend can actually do (no capability guessing). */
+
+function bizState() { return state.business || null; }
+
+function currentBizWorkflow() {
+  const data = bizState();
+  const sel = $('#biz-workflow');
+  if (!data || !sel) return null;
+  return window.XavaniBusiness.workflowById(data, sel.value);
+}
+
+function updateBizRunState() {
+  const w = currentBizWorkflow();
+  const values = { period: ($('#biz-period') || {}).value, currency: ($('#biz-currency') || {}).value };
+  const run = window.XavaniBusiness.runState(w, values);
+  const btn = $('#biz-run');
+  const note = $('#biz-missing');
+  if (!btn || !note) return;
+  btn.disabled = !run.enabled;
+  btn.title = run.enabled ? 'Stage this workflow request in the chat' : run.note;
+  note.classList.toggle('hidden', run.enabled);
+  note.textContent = run.enabled ? '' : run.note;
+}
+
+async function loadBusinessState() {
+  const list = $('#biz-sources');
+  if (!list) return;
+  try {
+    const res = await dapi('/desktop/api/business/state');
+    const d = await res.json();
+    if (d.error) { list.innerHTML = `<div class="empty">${escapeHtml(d.error)}</div>`; return; }
+    state.business = window.XavaniBusiness.normalizeState(d);
+    renderBusiness();
+  } catch (err) {
+    list.innerHTML = `<div class="empty">Business state unavailable: ${escapeHtml(String(err))}</div>`;
+  }
+}
+
+function bizRows(selector, items, make) {
+  const el = $(selector);
+  if (!el) return;
+  el.innerHTML = '';
+  if (!items.length) { el.innerHTML = '<div class="empty">None.</div>'; return; }
+  for (const item of items) el.appendChild(make(item));
+}
+
+function renderBusiness() {
+  const data = bizState();
+  if (!data) return;
+  const sel = $('#biz-workflow');
+  if (sel && !sel.options.length) {
+    for (const w of data.workflows) {
+      const opt = document.createElement('option');
+      opt.value = w.id;
+      opt.textContent = `${w.id} — ${w.name}`;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', updateBizRunState);
+    $('#biz-period').addEventListener('input', updateBizRunState);
+    $('#biz-currency').addEventListener('input', updateBizRunState);
+    $('#biz-run').addEventListener('click', runBusinessWorkflow);
+  }
+  bizRows('#biz-sources', data.sources, (s) => {
+    const el = document.createElement('div');
+    el.className = `biz-item${s.access === 'Unavailable' ? ' unavailable' : ''}`;
+    el.textContent = window.XavaniBusiness.sourceText(s);
+    return el;
+  });
+  bizRows('#biz-drafts', data.drafts, (d) => {
+    const el = document.createElement('div');
+    el.className = 'biz-item';
+    el.textContent = d.name || d.path || 'draft';
+    if (d.path) el.title = d.path;
+    return el;
+  });
+  bizRows('#biz-checks', data.checks, (c) => {
+    const el = document.createElement('div');
+    el.className = `biz-item${c.status === 'failed' ? ' failed' : ''}`;
+    el.textContent = window.XavaniBusiness.checkText(c);
+    return el;
+  });
+  bizRows('#biz-approvals', data.approvals, (a) => {
+    const el = document.createElement('div');
+    el.className = `biz-item${a.state === 'denied' ? ' denied' : ''}`;
+    const label = document.createElement('span');
+    label.textContent = window.XavaniBusiness.approvalText(a);
+    el.appendChild(label);
+    if (a.state === 'pending_approval' || a.state === 'draft') {
+      const approve = document.createElement('button');
+      approve.className = 'btn ghost sm biz-decision';
+      approve.textContent = 'Approve';
+      approve.addEventListener('click', () => decideBusiness(a.id, 'approve'));
+      const deny = document.createElement('button');
+      deny.className = 'btn ghost sm biz-decision';
+      deny.textContent = 'Deny';
+      deny.addEventListener('click', () => decideBusiness(a.id, 'deny'));
+      el.appendChild(approve);
+      el.appendChild(deny);
+    }
+    return el;
+  });
+  bizRows('#biz-outstanding', data.outstanding, (o) => {
+    const el = document.createElement('div');
+    el.className = 'biz-item';
+    el.textContent = `${o.summary || o.name || 'item'} — ${o.state || 'open'}`;
+    return el;
+  });
+  updateBizRunState();
+}
+
+async function decideBusiness(id, decision) {
+  const res = await dapi('/desktop/api/business/decide', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, decision }),
+  }).catch(() => null);
+  const d = res ? await res.json().catch(() => ({})) : {};
+  if (d && d.error) toast(d.error);
+  await loadBusinessState(); // navigation-proof: state is re-read from the queue
+}
+
+async function runBusinessWorkflow() {
+  const w = currentBizWorkflow();
+  if (!w) return;
+  const res = await dapi('/desktop/api/business/select', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workflow_id: w.id,
+      period: $('#biz-period').value.trim(),
+      currency: $('#biz-currency').value.trim(),
+    }),
+  }).catch(() => null);
+  const d = res ? await res.json().catch(() => ({})) : {};
+  if (!d || d.error) { toast(d && d.error ? d.error : 'Workflow selection failed'); return; }
+  if (d.message) {
+    const input = $('#input');
+    if (input) { input.value = d.message; input.focus(); }
+    toast('Workflow request staged in the chat.');
+  }
+}
+
 // The dock head tabs (Preview / To-Do) render from the reducer's tab group,
 // so the highlight can never disagree with the dock's state.
 function renderDockHead() {
   const files = wb.dockTab === 'files';
   const todo = dockState.active === 'todo';
+  const business = dockState.active === 'business';
   const preview = $('#tab-preview');
   const todoBtn = $('#tab-todo');
-  if (preview) preview.classList.toggle('active', !todo && !files);
+  const bizBtn = $('#tab-business');
+  if (preview) preview.classList.toggle('active', !todo && !business && !files);
   if (todoBtn) todoBtn.classList.toggle('active', todo);
+  if (bizBtn) bizBtn.classList.toggle('active', business);
 }
 
 function renderDockTabs() {
@@ -3564,21 +3709,24 @@ function renderDockTabs() {
 function setDockTab(id) {
   const prev = dockState.active;
   // Remember the file pane's scroll before leaving it.
-  if (prev && prev !== 'preview' && prev !== 'todo') {
+  if (prev && prev !== 'preview' && prev !== 'todo' && prev !== 'business') {
     const sc = $('#dock-filescroll');
     if (sc) dockState.scrollTops[prev] = sc.scrollTop;
   }
   dockState.active = id;
   const isPreview = id === 'preview';
   const isTodo = id === 'todo';
+  const isBusiness = id === 'business';
   // The tab group is the reducer's; To-Do is a legacy extra view.
   if (isPreview) wbDispatch({ type: 'dock-tab', tab: 'preview' });
-  else if (!isTodo) wbDispatch({ type: 'dock-tab', tab: 'files' });
+  else if (!isTodo && !isBusiness) wbDispatch({ type: 'dock-tab', tab: 'files' });
   if (prev !== id) wbFade($('.dock-body'));
   $('#dock-webview').style.display = (isPreview && !isTodo) ? '' : 'none';
   $('#dock-todoview').classList.toggle('hidden', !isTodo);
-  $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo);
+  $('#dock-businessview').classList.toggle('hidden', !isBusiness);
+  $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo || isBusiness);
   $('#dock-hint').style.display = (isPreview && !isTodo && !state.dockNavigated) ? '' : 'none';
+  if (isBusiness) loadBusinessState();
   $('.dock-bar').classList.toggle('in-todo', isTodo);
   renderDockTabs();
   if (isTodo) loadTodos();

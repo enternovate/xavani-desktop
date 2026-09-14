@@ -111,7 +111,8 @@ function configYaml(runtimePort) {
   ].join('\n');
 }
 
-async function launchWorkbench() {
+async function launchWorkbench(options = {}) {
+  const opts = options || {};
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'xavani-e2e-home-'));
   const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'xavani-e2e-ws-'));
   fs.writeFileSync(path.join(workspace, 'README.md'),
@@ -136,6 +137,31 @@ async function launchWorkbench() {
   await waitForPort(runtimePort);
 
   fs.writeFileSync(path.join(home, 'config.yaml'), configYaml(runtimePort));
+
+  if (opts.seedBusiness) {
+    const biz = opts.seedBusiness || {};
+    if (biz.state) {
+      const bizDir = path.join(workspace, '.xavani-business');
+      fs.mkdirSync(bizDir, { recursive: true });
+      fs.writeFileSync(path.join(bizDir, 'state.json'), JSON.stringify(biz.state, null, 2));
+    }
+    if (biz.approval) {
+      const dir = path.join(home, 'operator', 'action_approvals');
+      fs.mkdirSync(dir, { recursive: true });
+      const record = {
+        id: biz.approval.id,
+        request: biz.approval.request,
+        digest: biz.approval.digest || 'f'.repeat(64),
+        state: 'pending_approval',
+        consumed: false,
+        attempts: 0,
+        created_at: 0,
+        expires_at: null,
+        note: '',
+      };
+      fs.writeFileSync(path.join(dir, `${record.id}.json`), JSON.stringify(record, null, 2));
+    }
+  }
 
   const beforeBackends = serveDesktopPids();
   const app = await electronApp.launch({
