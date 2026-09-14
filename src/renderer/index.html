@@ -7,6 +7,7 @@
   <title>Xavani</title>
   <link rel="stylesheet" href="vendor/xterm.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="workbench.css">
 </head>
 <body>
   <div id="boot">
@@ -17,6 +18,7 @@
   </div>
 
   <div id="app" class="hidden">
+    <div id="wb-region-activity" class="wb-region" data-region="activity" aria-label="Chat and sessions">
     <aside id="sidebar">
       <div class="brand">
         <img src="assets/mark.png" alt="" class="brand-mark">
@@ -79,7 +81,10 @@
         </div>
       </div>
     </aside>
+    </div>
 
+    <div id="wb-region-explorer" class="wb-region" data-region="explorer">
+      <div id="wb-resize-explorer" class="wb-resize wb-resize-v" role="separator" aria-orientation="vertical" aria-label="Resize Explorer" title="Drag to resize — arrow keys adjust" tabindex="0"></div>
     <aside id="explorer" class="hidden">
       <div class="explorer-head">
         <span class="explorer-title">Explorer</span>
@@ -96,7 +101,9 @@
       </div>
       <div id="file-tree"><div class="empty">Loading…</div></div>
     </aside>
+    </div>
 
+    <div id="wb-region-editor" class="wb-region" data-region="editor">
     <main id="main">
       <header id="topbar">
         <div id="topbar-title">Chat</div>
@@ -186,9 +193,11 @@
         <div id="studio-help" class="mono">/studio toggles this layout · ⌘S saves · Visual edit (right dock) moves, deletes, recolours &amp; animates elements</div>
       </section>
     </main>
+    </div>
 
+    <div id="wb-region-agent" class="wb-region" data-region="agent">
     <aside id="dock">
-      <div id="dock-resize" title="Drag to resize — double-click to reset"></div>
+      <div id="dock-resize" role="separator" aria-orientation="vertical" aria-label="Resize Agent pane" tabindex="0" title="Drag to resize — double-click to reset, arrow keys adjust"></div>
       <div class="dock-bar">
         <div class="dock-tabs-head">
           <button class="dock-tab active" id="tab-preview" data-docktab="preview">Preview</button>
@@ -222,6 +231,19 @@
         <div id="dock-hint" class="empty">Preview your running app or website here.<br><br>Start a dev server (e.g. <span class="mono">npm run dev</span>) in a project, enter its URL above, and hit Go.<br>Use <b>Visual edit</b> to adjust spacing and layout by hand, then send the changes to the agent.<br><br><span class="mono dim">/flip</span> switches between this preview and files the agent is writing.</div>
       </div>
     </aside>
+    </div>
+
+    <div id="wb-region-bottom" class="wb-region" data-region="bottom" aria-label="Bottom pane">
+      <div id="wb-resize-bottom" class="wb-resize wb-resize-h" role="separator" aria-orientation="horizontal" aria-label="Resize bottom pane" title="Drag to resize — arrow keys adjust" tabindex="0"></div>
+      <div id="wb-bottom-note" class="wb-bottom-note">Terminal, problems, and activity panels land in this region once they are wired.</div>
+    </div>
+
+    <div id="wb-region-status" class="wb-region" data-region="status" aria-label="Workbench status">
+      <span class="wb-status-item">Workspace <span id="wb-status-ws" class="mono">none</span></span>
+      <span class="wb-status-item wb-status-optional" id="wb-status-layout">240 · 360 · 220</span>
+      <span class="wb-status-item wb-status-optional" id="wb-status-follow">follow on</span>
+      <button id="wb-reset-layout" class="wb-status-btn" title="Reset pane sizes for this workspace">Reset layout</button>
+    </div>
 
     <div id="wizard" class="hidden">
       <div id="wizard-card">
@@ -267,6 +289,7 @@
   <script src="vendor/xterm.js"></script>
   <script src="vendor/xterm-addon-fit.js"></script>
   <script src="run-state.js"></script>
+  <script src="workbench-state.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

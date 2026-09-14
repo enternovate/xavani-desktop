@@ -1,0 +1,197 @@
+/* Xavani Desktop — workbench shell (R2 Task 13).
+   Loaded after styles.css during the transition: it turns #app into the
+   named-area grid (activity · explorer · editor · agent · bottom · status)
+   and carries the desktop specification's dimensions and tokens.
+   Panel boundaries are grid tracks and borders — never negative margins. */
+
+:root {
+  --workbench-bg: #0b1017;
+  --workbench-panel: #111923;
+  --workbench-raised: #182331;
+  --workbench-border: #425368;
+  --workbench-text: #e7edf5;
+  --workbench-muted: #a9b6c6;
+  --workbench-accent: #69adff;
+  --workbench-success: #79d99e;
+  --workbench-warning: #f0c36c;
+  --workbench-danger: #ff9898;
+
+  /* Design constants (CSS px). Pane sizes come from the workbench state. */
+  --workbench-titlebar-h: 40px;
+  --workbench-activity-w: 44px;
+  --workbench-status-h: 24px;
+  --workbench-radius: 4px;
+  --workbench-focus-w: 2px;
+  --workbench-control-h: 28px;
+  --workbench-icon: 32px;
+  --workbench-motion: 120ms;
+  --workbench-font: 13px;
+  --workbench-line: 20px;
+  --workbench-space-1: 4px;
+  --workbench-space-2: 8px;
+  --workbench-space-3: 12px;
+  --workbench-space-4: 16px;
+  --workbench-space-5: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+}
+
+/* ---------- the shell grid ---------- */
+
+#app {
+  display: grid;
+  height: 100vh;
+  overflow: hidden;
+  /* The state module owns --wb-*-size; the shell decides whether a pane
+     is on screen at all. */
+  --wb-explorer-width: var(--wb-explorer-size, 240px);
+  --wb-agent-width: var(--wb-agent-size, 360px);
+  --wb-bottom-height: var(--wb-bottom-size, 220px);
+  --wb-activity-width: 0px;
+  grid-template-columns: var(--wb-activity-width) var(--wb-explorer-width) minmax(0, 1fr) var(--wb-agent-width);
+  grid-template-rows: minmax(0, 1fr) var(--wb-bottom-height) var(--workbench-status-h);
+  grid-template-areas:
+    "activity explorer editor agent"
+    "activity explorer bottom agent"
+    "status   status   status status";
+}
+
+/* Chat mode: the sidebar is the activity column and the workbench panes are
+   off screen. Studio mode switches the columns over without touching IDs. */
+#app:not(.studio) {
+  --wb-activity-width: var(--sidebar-w);
+  --wb-explorer-width: 0px;
+  --wb-bottom-height: 0px;
+}
+#app.studio #sidebar { display: none; }
+#app:not(.dock-open) { --wb-agent-width: 0px; }
+
+.wb-region {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  color: var(--workbench-text);
+  font-size: var(--workbench-font);
+  line-height: var(--workbench-line);
+}
+
+#app [data-region="activity"] { grid-area: activity; overflow: hidden; }
+#app [data-region="explorer"] { grid-area: explorer; overflow: hidden; }
+#app [data-region="editor"] { grid-area: editor; overflow: hidden; }
+#app [data-region="agent"] { grid-area: agent; overflow: hidden; }
+
+/* The panes fill the tracks the shell gives them. */
+#app [data-region="explorer"] #explorer { width: 100%; min-width: 0; flex: 1; }
+#app [data-region="agent"] #dock { width: 100%; min-width: 0; flex: 1; }
+
+/* ---------- bottom region ---------- */
+
+#app [data-region="bottom"] {
+  grid-area: bottom;
+  border-top: 1px solid var(--workbench-border);
+  background: var(--workbench-panel);
+  overflow: hidden;
+}
+#app:not(.studio) [data-region="bottom"] { display: none; }
+.wb-bottom-note {
+  padding: var(--workbench-space-3) var(--workbench-space-4);
+  color: var(--workbench-muted);
+  font-size: var(--workbench-font);
+}
+
+/* ---------- status region ---------- */
+
+#app [data-region="status"] {
+  grid-area: status;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--workbench-space-3);
+  padding: 0 var(--workbench-space-2) 0 var(--workbench-space-3);
+  border-top: 1px solid var(--workbench-border);
+  background: var(--workbench-raised);
+  color: var(--workbench-muted);
+  height: var(--workbench-status-h);
+  font-size: 11px;
+}
+.wb-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--workbench-space-1);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-status-item .mono { color: var(--workbench-text); }
+.wb-status-btn {
+  min-height: var(--workbench-control-h);
+  padding: 0 var(--workbench-space-2);
+  margin-left: auto;
+  border: 1px solid var(--workbench-border);
+  border-radius: var(--workbench-radius);
+  background: transparent;
+  color: var(--workbench-text);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--workbench-motion) ease;
+}
+.wb-status-btn:hover { background: rgba(105, 173, 255, 0.16); }
+
+/* ---------- resize handles ---------- */
+
+.wb-resize { position: absolute; z-index: 40; background: transparent; }
+.wb-resize-v { top: 0; bottom: 0; width: 6px; cursor: col-resize; }
+.wb-resize-h { left: 0; right: 0; height: 6px; cursor: row-resize; }
+#wb-resize-explorer { right: -3px; }
+#wb-resize-bottom { top: -3px; }
+
+.wb-resize[role="separator"] { touch-action: none; }
+.wb-resize[role="separator"]:hover,
+.wb-resize[role="separator"]:focus-visible,
+body.wb-resizing .wb-resize[role="separator"] {
+  background: var(--workbench-accent);
+  opacity: 0.55;
+}
+.wb-resize[role="separator"]:focus-visible,
+#dock-resize[role="separator"]:focus-visible {
+  outline: var(--workbench-focus-w) solid var(--workbench-accent);
+  outline-offset: calc(-1 * var(--workbench-focus-w));
+  opacity: 0.8;
+}
+body.wb-resizing { user-select: none; }
+
+/* Primary controls keep the 28 px minimum height in the shell chrome. */
+#app [data-region="status"] button { min-height: var(--workbench-control-h); }
+
+/* ---------- compact layout ----------
+   Below 1020 px the side panes sit at their specification minima and the
+   secondary status text drops, so nothing needs horizontal page scrolling. */
+@media (max-width: 1020px) {
+  #app {
+    --wb-explorer-width: 180px;
+    --wb-agent-width: 300px;
+    --wb-bottom-height: 120px;
+  }
+  .wb-status-optional { display: none; }
+}
+
+/* 200% zoom lands here: one column at a time, still no page-level scroll. */
+@media (max-width: 760px) {
+  #app {
+    grid-template-columns: var(--wb-activity-width) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) var(--workbench-status-h);
+    grid-template-areas:
+      "activity editor"
+      "status   status";
+  }
+  #app [data-region="explorer"],
+  #app [data-region="agent"],
+  #app [data-region="bottom"] { display: none; }
+}

@@ -109,7 +109,7 @@ async function checkOutstanding() {
         kind: 'info',
         ms: 12000,
         onClick: () => {
-          if (!state.dockUserClosed && !$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+          if (!state.dockUserClosed && !wb.dockOpen) $('#dock-toggle').click();
           document.querySelector('#tab-todo').click();
         },
       },
@@ -250,6 +250,7 @@ async function init() {
   setupSlash();
   setupModelMenus();
   loadPrefs();
+  setupWorkbench();
   setupDock();
   setupStudio();
   wireComposerClean();
@@ -1655,6 +1656,7 @@ function setupSlash() {
     { name: 'new', desc: 'Start a fresh chat session', native: true, action: newChat },
     { name: 'studio', desc: 'Toggle Studio: explorer + code editor + live preview', native: true, action: () => toggleStudio() },
     { name: 'flip', desc: "Flip the right dock between the live site and files the agent is writing", native: true, action: () => dockFlip() },
+    { name: 'reset-layout', desc: 'Reset the workbench pane sizes for this workspace', native: true, action: () => wbDispatch({ type: 'reset-layout' }) },
   ];
   state.cliCommands = [...nativeCommands, ...state.cliCommands];
   buildChips();
@@ -2250,12 +2252,12 @@ async function checkFirstRun() {
 
 function setupDock() {
   $('#dock-toggle').addEventListener('click', () => {
-    $('#app').classList.toggle('dock-open');
+    wbDispatch({ type: wb.dockOpen ? 'close-dock' : 'open-dock' });
     setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
   });
   $('#dock-close').addEventListener('click', () => {
     state.dockUserClosed = true;
-    $('#app').classList.remove('dock-open');
+    wbDispatch({ type: 'close-dock' });
   });
   $('#dock-toggle').addEventListener('click', () => { state.dockUserClosed = false; });
   const go = () => {
@@ -2685,7 +2687,7 @@ function toggleStudio(force) {
   if (studio.open) {
     switchView('studio');
     state.dockUserClosed = false;
-    if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+    if (!wb.dockOpen) wbDispatch({ type: 'open-dock' });
     loadWorkspaceRoot();
   } else {
     switchView('chat');
@@ -2709,6 +2711,7 @@ function setupStudio() {
     if (tab) {
       tab.dirty = true;
       tab.content = editor.value;
+      wbDispatch({ type: 'dirty', value: true });
       renderTabs();
     }
     syncGutter();
@@ -2739,6 +2742,7 @@ async function chooseWorkspaceRoot() {
     studio.expanded = {};
     studio.selectedDir = null;
     $('#ws-root').value = res.root;
+    wbSwitchWorkspace(wbWorkspaceId());
     renderTree(res.root);
     return res;
   } catch (err) { treeError(String(err)); return null; }
@@ -2757,11 +2761,13 @@ async function loadWorkspaceRoot() {
     if (workspaceRequired(d)) {
       studio.root = null;
       $('#ws-root').value = '';
+      wbSwitchWorkspace(wbWorkspaceId());
       treeError(d.error);
       return;
     }
     studio.root = d.root;
     $('#ws-root').value = d.root;
+    wbSwitchWorkspace(wbWorkspaceId());
     renderTree(d.root);
   } catch { treeError('Backend unreachable'); }
 }
@@ -2867,6 +2873,7 @@ async function openFile(path) {
 function activateTab(path) {
   studio.activePath = path || null;
   const tab = activeTab();
+  wbDispatch({ type: 'dirty', value: Boolean(tab && tab.dirty) });
   $('#editor-empty').style.display = tab ? 'none' : '';
   $('#editor').style.display = tab ? '' : 'none';
   $('#editor-gutter').style.display = tab ? '' : 'none';
@@ -2927,6 +2934,7 @@ async function saveActiveFile(force) {
       // The disk moved under the buffer: nothing was written, the buffer stays
       // dirty, and the conflict review shows base / buffer / disk.
       tab.dirty = true;
+      wbDispatch({ type: 'dirty', value: true });
       renderTabs();
       $('#save-state').textContent = 'Conflict — file changed on disk';
       let disk = d.disk, revision = d.current_revision;
@@ -2944,6 +2952,7 @@ async function saveActiveFile(force) {
     tab.revision = d.revision || '';
     tab.base = tab.content;
     tab.dirty = false;
+    wbDispatch({ type: 'dirty', value: false });
     clearConflict();
     $('#save-state').textContent = `Saved ${new Date().toLocaleTimeString()}`;
     renderTabs();
@@ -2982,6 +2991,7 @@ function showConflict(tab, disk, diskRevision) {
     tab.base = disk;
     tab.revision = diskRevision;
     tab.dirty = false;
+    wbDispatch({ type: 'dirty', value: false });
     clearConflict();
     activateTab(tab.path);
     $('#save-state').textContent = 'Reloaded from disk';
@@ -3005,13 +3015,131 @@ function fsCreate(op) {
     .catch((err) => treeError(String(err)));
 }
 
+/* ---------------- workbench shell (R2 Task 13) ----------------
+   workbench-state.js owns the dock, the follow flag, and the pane sizes.
+   The classes, CSS variables, and status text below are rendered from that
+   state; nothing here keeps a second copy of those values. */
+
+const WB = globalThis.XavaniWorkbench;
+const WB_LAYOUT_KEY = 'xz-wb-layouts-v1';
+const WB_RESIZE_STEP = 16; // the 16 px spacing token
+const WB_PANE_DIMS = { explorer: 'explorerWidth', agent: 'agentWidth', bottom: 'bottomHeight' };
+
+let wb = WB.initialWorkbench('default');
+
+function wbWorkspaceId() { return studio.root || 'default'; }
+function wbViewport() { return { width: window.innerWidth, height: window.innerHeight }; }
+function wbProfile() {
+  const chip = $('#foot-profile');
+  return (chip && chip.textContent.trim()) || 'default';
+}
+function wbLayoutsKey() { return `${WB_LAYOUT_KEY}:${wbProfile()}`; }
+function wbReadLayouts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(wbLayoutsKey()) || '{}');
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch { return {}; }
+}
+function wbSaveLayouts() {
+  try { localStorage.setItem(wbLayoutsKey(), JSON.stringify(wb.layouts || {})); } catch {}
+}
+
+function wbDispatch(action) {
+  const next = WB.reduceWorkbench(wb, Object.assign({ viewport: wbViewport() }, action));
+  if (next === wb) return wb;
+  const layoutsChanged = next.layouts !== wb.layouts;
+  wb = next;
+  wbRender();
+  if (layoutsChanged) wbSaveLayouts();
+  return wb;
+}
+
+function wbRender() {
+  const app = $('#app');
+  if (!app) return;
+  app.style.setProperty('--wb-explorer-size', `${wb.explorerWidth}px`);
+  app.style.setProperty('--wb-agent-size', `${wb.agentWidth}px`);
+  app.style.setProperty('--wb-bottom-size', `${wb.bottomHeight}px`);
+  app.classList.toggle('dock-open', wb.dockOpen);
+  const ws = $('#wb-status-ws');
+  if (ws) ws.textContent = studio.root || 'none';
+  const layout = $('#wb-status-layout');
+  if (layout) layout.textContent = `${wb.explorerWidth} · ${wb.agentWidth} · ${wb.bottomHeight}`;
+  const follow = $('#wb-status-follow');
+  if (follow) follow.textContent = `follow ${wb.follow ? 'on' : 'paused'}`;
+  renderDockHead();
+}
+
+// Only the switched-to workspace's layout comes back; a stored size is
+// clamped to the viewport it returns into.
+function wbSwitchWorkspace(workspaceId) {
+  wbDispatch({ type: 'workspace', workspaceId });
+  const saved = wbReadLayouts()[workspaceId];
+  if (saved) wbDispatch({ type: 'restore-layout', layout: saved });
+}
+
+function wbFileChanged(path) {
+  wbDispatch({ type: 'file-changed', workspaceId: wb.workspaceId, seq: wb.lastFileSeq + 1, path });
+}
+
+function setupWorkbench() {
+  wb = WB.initialWorkbench(wbWorkspaceId());
+  const saved = wbReadLayouts()[wb.workspaceId];
+  if (saved) wb = WB.reduceWorkbench(wb, { type: 'restore-layout', layout: saved, viewport: wbViewport() });
+  wbSaveLayouts();
+
+  wbBindResize($('#wb-resize-explorer'), 'explorer', 'x');
+  wbBindResize($('#wb-resize-bottom'), 'bottom', 'y');
+  const reset = $('#wb-reset-layout');
+  if (reset) reset.addEventListener('click', () => wbDispatch({ type: 'reset-layout' }));
+
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => wbDispatch({ type: 'viewport' }), 120);
+  });
+  wbRender();
+}
+
+/* Every handle is a role="separator" with arrow-key support. The pointer
+   proposes a size; the reducer clamps it. */
+function wbBindResize(handle, pane, axis, after) {
+  if (!handle) return;
+  const nudge = (delta) => wbDispatch({ type: 'resize', pane, value: wb[WB_PANE_DIMS[pane]] + delta });
+  handle.addEventListener('keydown', (e) => {
+    if (e.key === (axis === 'x' ? 'ArrowLeft' : 'ArrowUp')) { e.preventDefault(); nudge(-WB_RESIZE_STEP); }
+    else if (e.key === (axis === 'x' ? 'ArrowRight' : 'ArrowDown')) { e.preventDefault(); nudge(WB_RESIZE_STEP); }
+  });
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    document.body.classList.add('wb-resizing');
+    const move = (ev) => {
+      const value = axis === 'x'
+        ? (pane === 'agent' ? window.innerWidth - ev.clientX : ev.clientX)
+        : window.innerHeight - ev.clientY - WB.WORKBENCH_TOKENS.statusBarHeight;
+      wbDispatch({ type: 'resize', pane, value });
+    };
+    const up = () => {
+      document.body.classList.remove('wb-resizing');
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      if (after) after();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+}
+
 /* ---------------- dock tabs: preview ⇄ agent files ---------------- */
 
 const dockState = {
   fileTabs: [],
   active: 'preview',
-  follow: true,
   loadSeq: 0,
+  dirtyRun: false,
+  // follow and the tab group live in the reducer only (Code Pack K).
+  get follow() { return wb.follow; },
+  set follow(value) { wbDispatch({ type: 'follow', value }); },
 };
 
 const DOCK_MAX_TABS = 15;
@@ -3141,6 +3269,17 @@ function syncEditorHlScroll() {
   hl.scrollLeft = ed.scrollLeft;
 }
 
+// The dock head tabs (Preview / To-Do) render from the reducer's tab group,
+// so the highlight can never disagree with the dock's state.
+function renderDockHead() {
+  const files = wb.dockTab === 'files';
+  const todo = dockState.active === 'todo';
+  const preview = $('#tab-preview');
+  const todoBtn = $('#tab-todo');
+  if (preview) preview.classList.toggle('active', !todo && !files);
+  if (todoBtn) todoBtn.classList.toggle('active', todo);
+}
+
 function renderDockTabs() {
   const wrap = $('#dock-tabs');
   wrap.innerHTML = '';
@@ -3178,6 +3317,9 @@ function setDockTab(id) {
   dockState.active = id;
   const isPreview = id === 'preview';
   const isTodo = id === 'todo';
+  // The tab group is the reducer's; To-Do is a legacy extra view.
+  if (isPreview) wbDispatch({ type: 'dock-tab', tab: 'preview' });
+  else if (!isTodo) wbDispatch({ type: 'dock-tab', tab: 'files' });
   $('#dock-webview').style.display = (isPreview && !isTodo) ? '' : 'none';
   $('#dock-todoview').classList.toggle('hidden', !isTodo);
   $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo);
@@ -3345,6 +3487,7 @@ function agentTouchedFile(evt) {
   if (!/writ|patch|edit|creat|save|apply/.test(tool)) return;
   const path = extractFilePath(evt);
   if (!path) return;
+  wbFileChanged(path);
   dockState.dirtyRun = true;
   clearTimeout(dockRefreshTimers[path]);
   dockRefreshTimers[path] = setTimeout(() => {
@@ -3370,7 +3513,7 @@ function dockRunEnded() {
 }
 
 function dockFlip() {
-  if (!state.dockUserClosed && !$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+  if (!state.dockUserClosed && !wb.dockOpen) $('#dock-toggle').click();
   state.dockUserClosed = false;
   if (dockState.active === 'preview') {
     if (dockState.fileTabs.length) setDockTab(dockState.fileTabs[0].path);
@@ -3382,11 +3525,7 @@ function dockFlip() {
 function setupDockTabs() {
   renderDockTabs();
   for (const btn of document.querySelectorAll('.dock-tabs-head .dock-tab')) {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.dock-tabs-head .dock-tab').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      setDockTab(btn.dataset.docktab);
-    });
+    btn.addEventListener('click', () => setDockTab(btn.dataset.docktab));
   }
   $('#todo-add').addEventListener('click', async () => {
     const input = $('#todo-input');
@@ -3404,33 +3543,15 @@ function setupDockTabs() {
   });
 }
 
+// The Agent pane size lives in the workbench state (per workspace and
+// profile); the standalone xd-dock-w key is gone.
 function setupDockResize() {
   const handle = $('#dock-resize');
-  const dock = $('#dock');
-  let dragging = false;
-  const stored = parseInt(localStorage.getItem('xd-dock-w'), 10);
-  if (stored >= 320) dock.style.width = `${stored}px`;
-  handle.addEventListener('mousedown', (e) => {
-    dragging = true;
-    document.body.classList.add('dock-resizing');
-    e.preventDefault();
-  });
-  window.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
-    const w = Math.min(window.innerWidth - 360, Math.max(320, window.innerWidth - e.clientX));
-    dock.style.width = `${w}px`;
-  });
-  window.addEventListener('mouseup', () => {
-    if (!dragging) return;
-    dragging = false;
-    document.body.classList.remove('dock-resizing');
-    localStorage.setItem('xd-dock-w', String(dock.offsetWidth));
-    setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
-  });
+  const refit = () => { setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60); };
+  wbBindResize(handle, 'agent', 'x', refit);
   handle.addEventListener('dblclick', () => {
-    dock.style.width = '';
-    localStorage.removeItem('xd-dock-w');
-    setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
+    wbDispatch({ type: 'resize', pane: 'agent', value: WB.LAYOUT_DEFAULTS.agentWidth });
+    refit();
   });
 }
 
