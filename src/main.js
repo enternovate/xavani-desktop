@@ -2,9 +2,11 @@
 
 const { app, BrowserWindow, Menu, ipcMain, shell, session } = require('electron');
 const { spawn } = require('child_process');
+const { randomBytes } = require('node:crypto');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const { controlRequest, trustedSender } = require('./security');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_DEV = !!process.env.XAVANI_DESKTOP_DEV;
@@ -12,8 +14,24 @@ const IS_DEV = !!process.env.XAVANI_DESKTOP_DEV;
 let mainWindow = null;
 let backend = null;
 let backendInfo = null;
+let controlSecret = null;
+let backendGeneration = 0;
 let restartAttempts = 0;
 let quitting = false;
+
+function mainWebContentsId() {
+  return mainWindow && !mainWindow.isDestroyed() && mainWindow.webContents ? mainWindow.webContents.id : -1;
+}
+
+function activeControlPorts() {
+  const ports = new Set();
+  if (!backendInfo) return ports;
+  for (const key of ['api_port', 'desktop_port']) {
+    const p = Number(backendInfo[key]);
+    if (Number.isInteger(p) && p > 0) ports.add(p);
+  }
+  return ports;
+}
 
 function packagedBackendCommand() {
   const resources = process.resourcesPath;
@@ -48,10 +66,22 @@ function startBackend() {
     PYTHONDONTWRITEBYTECODE: '1',
   };
   delete env.ELECTRON_RUN_AS_NODE;
-  backend = spawn(spec.cmd, spec.args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+  backendGeneration += 1;
+  const generation = backendGeneration;
+  backendInfo = null;
+  controlSecret = randomBytes(32).toString('hex');
+  backend = spawn(spec.cmd, spec.args, { env, stdio: ['pipe', 'pipe', 'pipe'] });
+  try {
+    backend.stdin.write(JSON.stringify({ secret: controlSecret }) + '\n');
+    backend.stdin.end();
+  } catch (err) {
+    sendToWindow('backend-exit', { error: `bootstrap secret write failed: ${err && err.message ? err.message : err}` });
+    return;
+  }
 
   let stdoutBuf = '';
   backend.stdout.on('data', (chunk) => {
+    if (generation !== backendGeneration) return;
     stdoutBuf += chunk.toString();
     let idx;
     while ((idx = stdoutBuf.indexOf('\n')) !== -1) {
@@ -60,10 +90,11 @@ function startBackend() {
       if (!line.startsWith('{')) continue;
       try {
         const parsed = JSON.parse(line);
+        if (generation !== backendGeneration) return;
         if (parsed.ready) {
           backendInfo = parsed;
           restartAttempts = 0;
-          probeReady(parsed.api_port, parsed.desktop_port);
+          probeReady(parsed.api_port, parsed.desktop_port, generation);
         } else {
           sendToWindow('backend-exit', { error: parsed.error || 'backend failed to start' });
         }
@@ -71,9 +102,11 @@ function startBackend() {
     }
   });
   backend.stderr.on('data', (chunk) => {
+    if (generation !== backendGeneration) return;
     if (restartAttempts > 0) console.error('[xavani-backend]', chunk.toString().slice(0, 2000));
   });
   backend.on('exit', (code) => {
+    if (generation !== backendGeneration) return;
     backend = null;
     if (!quitting) {
       sendToWindow('backend-exit', { code });
@@ -82,25 +115,27 @@ function startBackend() {
   });
 }
 
-let probing = false;
+let probingGeneration = 0;
 let backendReadySent = false;
-function probeReady(apiPort, desktopPort) {
-  if (probing || backendReadySent) return;
-  probing = true;
+function probeReady(apiPort, desktopPort, generation) {
+  if (probingGeneration === generation || backendReadySent) return;
+  probingGeneration = generation;
+  const stopProbing = () => { if (probingGeneration === generation) probingGeneration = 0; };
   const attempt = (n) => {
-    if (backendReadySent || !backend) { probing = false; return; }
+    if (generation !== backendGeneration || backendReadySent || !backend) { stopProbing(); return; }
     let settled = false;
     const retryOnce = () => {
       if (settled || backendReadySent) return;
       settled = true;
+      if (generation !== backendGeneration) { stopProbing(); return; }
       setTimeout(() => attempt(n + 1), 300);
     };
     const req = http.get({ host: '127.0.0.1', port: apiPort, path: '/health', timeout: 1500 }, (res) => {
       res.resume();
-      if (settled) return;
+      if (settled || generation !== backendGeneration) return;
       if (res.statusCode === 200) {
         settled = true;
-        probing = false;
+        stopProbing();
         backendReadySent = true;
         sendToWindow('backend-ready', { apiPort, desktopPort });
       } else {
@@ -188,12 +223,31 @@ async function checkForUpdates() {
   return lastUpdateInfo;
 }
 
-function createWindow() {
-  // Voice input: grant mic only to our own file:// origin.
-  session.defaultSession.setPermissionRequestHandler((_wc, permission, cb) => {
-    cb(permission === 'media');
+function installSessionGates() {
+  const isMainContents = (wc) => !!mainWindow && !mainWindow.isDestroyed() && wc === mainWindow.webContents;
+
+  // The backend requires a per-run bearer token on both control surfaces. It
+  // is injected here, in the main process, and never exposed to the renderer.
+  session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = { ...details.requestHeaders };
+    delete headers['Authorization'];
+    delete headers['authorization'];
+    if (controlSecret && controlRequest(details, mainWebContentsId(), activeControlPorts())) {
+      headers['Authorization'] = 'Bearer ' + controlSecret;
+    }
+    callback({ requestHeaders: headers });
   });
 
+  // Voice input only: mic from the main window. Preview webviews get nothing.
+  session.defaultSession.setPermissionCheckHandler(
+    (wc, permission) => permission === 'media' && isMainContents(wc),
+  );
+  session.defaultSession.setPermissionRequestHandler(
+    (wc, permission, cb) => cb(permission === 'media' && isMainContents(wc)),
+  );
+}
+
+function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -212,6 +266,14 @@ function createWindow() {
       webviewTag: true,
     },
   });
+  // Preview webviews are untrusted: no preload, no node, sandboxed.
+  mainWindow.webContents.on('will-attach-webview', (event, webPreferences) => {
+    delete webPreferences.preload;
+    webPreferences.nodeIntegration = false;
+    webPreferences.contextIsolation = true;
+    webPreferences.sandbox = true;
+  });
+
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   mainWindow.once('ready-to-show', () => mainWindow.show());
   mainWindow.on('closed', () => { mainWindow = null; });
@@ -287,26 +349,42 @@ if (!gotLock) {
 
   app.whenReady().then(() => {
     buildMenu();
+    installSessionGates();
 
-    ipcMain.handle('runtime-info', () => ({
-      platform: process.platform,
-      electron: process.versions.electron,
-      isDev: IS_DEV,
-      backend: backendInfo,
-    }));
-    ipcMain.on('backend-restart', () => { stopBackend(); startBackend(); });
-    ipcMain.handle('reveal-path', (_e, p) => {
+    ipcMain.handle('runtime-info', (event) => {
+      if (!trustedSender(event, mainWindow)) return null;
+      return {
+        platform: process.platform,
+        electron: process.versions.electron,
+        isDev: IS_DEV,
+        backend: backendInfo,
+      };
+    });
+    ipcMain.on('backend-restart', (event) => {
+      if (!trustedSender(event, mainWindow)) return;
+      stopBackend();
+      startBackend();
+    });
+    ipcMain.handle('reveal-path', (event, p) => {
+      if (!trustedSender(event, mainWindow)) return null;
       if (typeof p === 'string' && fs.existsSync(p)) shell.showItemInFolder(p);
+      return null;
     });
-    ipcMain.handle('open-external', (_e, u) => {
+    ipcMain.handle('open-external', (event, u) => {
+      if (!trustedSender(event, mainWindow)) return null;
       if (typeof u === 'string' && /^https?:\/\//.test(u)) shell.openExternal(u);
+      return null;
     });
-    ipcMain.handle('set-zoom', (_e, z) => {
+    ipcMain.handle('set-zoom', (event, z) => {
+      if (!trustedSender(event, mainWindow)) return null;
       const factor = Math.min(Math.max(Number(z) || 1, 0.5), 2);
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.setZoomFactor(factor);
       return factor;
     });
-    ipcMain.handle('check-for-updates', () => checkForUpdates());
+    ipcMain.handle('check-for-updates', (event) => {
+      if (!trustedSender(event, mainWindow)) return null;
+      return checkForUpdates();
+    });
 
     createWindow();
     startBackend();
