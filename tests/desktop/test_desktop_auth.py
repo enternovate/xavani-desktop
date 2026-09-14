@@ -50,6 +50,10 @@ def test_null_origin_is_allowed():
     assert _probe({"Authorization": BEARER, "Origin": "null"}) == (200, {"ok": True})
 
 
+def test_file_scheme_origin_is_allowed():
+    assert _probe({"Authorization": BEARER, "Origin": "file://"}) == (200, {"ok": True})
+
+
 def test_foreign_origin_is_denied():
     headers = {"Authorization": BEARER, "Origin": "https://evil.example"}
     assert _probe(headers) == (403, {"error": "Origin denied."})

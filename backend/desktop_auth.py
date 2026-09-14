@@ -20,8 +20,11 @@ def desktop_auth(secret: str):
         supplied = request.headers.get("Authorization", "")
         if not hmac.compare_digest(supplied.encode(), expected):
             return web.json_response({"error": "Unauthorized."}, status=401)
+        # The renderer is a file:// page: WebSocket upgrades carry
+        # "Origin: file://" while XHRs carry no Origin at all.  Both are
+        # the app itself; hostile web pages always send an http(s) origin.
         origin = request.headers.get("Origin")
-        if origin and origin != "null":
+        if origin and origin not in ("null", "file://"):
             return web.json_response({"error": "Origin denied."}, status=403)
         return await handler(request)
 
