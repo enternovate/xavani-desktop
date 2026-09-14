@@ -10,9 +10,13 @@
   "scripts": {
     "start": "electron .",
     "dist:mac": "bash scripts/build-macos.sh",
+    "test:unit": "node --test tests/desktop/*.js",
+    "test:e2e": "playwright test",
+    "check:syntax": "node --check src/main.js && node --check src/preload.js && node --check src/renderer/app.js",
     "build:monaco": "esbuild node_modules/monaco-editor/esm/vs/editor/editor.main.js --bundle --minify --format=iife --global-name=monaco --outdir=src/renderer/vendor --entry-names=monaco.bundle --loader:.ttf=file --banner:js=\"/* Generated from monaco-editor 0.56.0 (MIT) - npm run build:monaco */\" && esbuild node_modules/monaco-editor/esm/vs/editor/editor.worker.js --bundle --minify --format=iife --outfile=src/renderer/editor-worker.js --banner:js=\"/* Generated from monaco-editor 0.56.0 (MIT) - npm run build:monaco */\""
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "electron": "^38.2.0",
     "esbuild": "0.28.2"
   },
