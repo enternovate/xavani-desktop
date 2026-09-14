@@ -8,6 +8,7 @@ const fs = require('fs');
 const http = require('http');
 const { controlRequest, trustedSender } = require('./security');
 const { buildGrantInit, parseGrantResponse } = require('./workspace-grant');
+const { createAutoUpdateSchedule } = require('./update-policy');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_DEV = !!process.env.XAVANI_DESKTOP_DEV;
@@ -233,7 +234,6 @@ async function grantWorkspace(absPath) {
 /* ---------------- update check (GitHub releases, anonymous GET) ---------------- */
 
 const UPDATE_REPO = 'enternovate/xavani-desktop';
-const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 let lastUpdateInfo = null;
 
 function isNewer(remote, local) {
@@ -283,6 +283,17 @@ async function checkForUpdates() {
   };
   sendToWindow('update-info', lastUpdateInfo);
   return lastUpdateInfo;
+}
+
+// Update checking is opt-in: the renderer reports the user's stored choice and
+// nothing is scheduled before that.
+const autoUpdate = createAutoUpdateSchedule({ check: checkForUpdates });
+
+function noticesPath() {
+  const packaged = path.join(process.resourcesPath, 'app', 'THIRD_PARTY_NOTICES.md');
+  if (fs.existsSync(packaged)) return packaged;
+  const repo = path.join(__dirname, '..', 'THIRD_PARTY_NOTICES.md');
+  return fs.existsSync(repo) ? repo : null;
 }
 
 function installSessionGates() {
@@ -419,6 +430,14 @@ if (!gotLock) {
   app.whenReady().then(() => {
     buildMenu();
     installSessionGates();
+    // The native About panel names the product and the publisher (Task 24b).
+    if (IS_MAC) {
+      app.setAboutPanelOptions({
+        applicationName: 'Xavani',
+        applicationVersion: app.getVersion(),
+        credits: 'Xavani Desktop by Enternovate. Third-party notices: THIRD_PARTY_NOTICES.md.',
+      });
+    }
 
     ipcMain.handle('runtime-info', (event) => {
       if (!trustedSender(event, mainWindow)) return null;
@@ -427,6 +446,7 @@ if (!gotLock) {
         electron: process.versions.electron,
         isDev: IS_DEV,
         backend: backendInfo,
+        notices: noticesPath(),
       };
     });
     ipcMain.on('backend-restart', (event) => {
@@ -454,6 +474,10 @@ if (!gotLock) {
       if (!trustedSender(event, mainWindow)) return null;
       return checkForUpdates();
     });
+    ipcMain.handle('set-auto-update', (event, enabled) => {
+      if (!trustedSender(event, mainWindow)) return null;
+      return autoUpdate.setEnabled(enabled);
+    });
     ipcMain.handle('choose-workspace', async (event) => {
       if (!trustedSender(event, mainWindow)) return null;
       const picked = await dialog.showOpenDialog(mainWindow, {
@@ -475,8 +499,6 @@ if (!gotLock) {
 
     createWindow();
     startBackend();
-    setInterval(() => checkForUpdates().catch(() => {}), UPDATE_INTERVAL_MS);
-    setTimeout(() => checkForUpdates().catch(() => {}), 8000);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

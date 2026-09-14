@@ -22,7 +22,7 @@ console.log('semver tests: 6 passed');
 // main.js must contain the same compare logic.
 const main = require('fs').readFileSync(
   require('path').join(__dirname, '..', '..', 'src', 'main.js'), 'utf8');
-for (const marker of ['isNewer', 'releases/latest', 'UPDATE_INTERVAL_MS']) {
+for (const marker of ['isNewer', 'releases/latest', 'createAutoUpdateSchedule']) {
   assert.ok(main.includes(marker), `main.js missing ${marker}`);
 }
 console.log('main.js markers: ok');

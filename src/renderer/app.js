@@ -257,16 +257,21 @@ async function init() {
   startOutstandingReminders();
   setupSidebarFoot();
 
-  window.xavaniDesktop.checkForUpdates().then((info) => {
-    if (info && info.updateAvailable && !localStorage.getItem('xz-update-notified')) {
-      localStorage.setItem('xz-update-notified', info.latest);
-      notify(`Update available: Xavani ${info.latest}`, {
-        kind: 'update',
-        onClick: () => info.url && window.xavaniDesktop.openExternal(info.url),
-        ms: 10000,
-      });
-    }
-  }).catch(() => {});
+  // Update checks are opt-in: nothing is requested unless the user enabled it.
+  const autoUpdateOn = localStorage.getItem('xz-auto-update') === '1';
+  window.xavaniDesktop.setAutoUpdate(autoUpdateOn)
+    .then((on) => (on ? window.xavaniDesktop.checkForUpdates() : null))
+    .then((info) => {
+      if (info && info.updateAvailable && localStorage.getItem('xz-update-notified') !== info.latest) {
+        localStorage.setItem('xz-update-notified', info.latest);
+        notify(`Update available: Xavani ${info.latest}`, {
+          kind: 'update',
+          onClick: () => info.url && window.xavaniDesktop.openExternal(info.url),
+          ms: 10000,
+        });
+      }
+    })
+    .catch(() => {});
 
   $('#send').addEventListener('click', onSend);
   $('#stop').addEventListener('click', onStop);
@@ -1357,12 +1362,19 @@ async function loadSettings() {
   });
 
   // --- Updates ---
-  const uc = settingsCard('Updates', 'Check GitHub releases for new desktop builds.', 'general');
+  const uc = settingsCard('Updates', 'Check GitHub releases for new desktop builds. Automatic checks are off until you enable them.', 'general');
   const urow = document.createElement('div');
   urow.className = 'set-row';
-  urow.innerHTML = `<button class="btn ghost sm" id="upd-check">Check now</button> <span id="upd-out" class="dim"></span>`;
+  const autoUpd = localStorage.getItem('xz-auto-update') === '1';
+  urow.innerHTML = `<label class="dim"><input type="checkbox" id="upd-auto"${autoUpd ? ' checked' : ''}> Check automatically</label>
+    <button class="btn ghost sm" id="upd-check">Check now</button> <span id="upd-out" class="dim"></span>`;
   uc.appendChild(urow);
   gen.appendChild(uc);
+  uc.querySelector('#upd-auto').addEventListener('change', async (ev) => {
+    const on = ev.target.checked;
+    localStorage.setItem('xz-auto-update', on ? '1' : '0');
+    await window.xavaniDesktop.setAutoUpdate(on);
+  });
   uc.querySelector('#upd-check').addEventListener('click', async () => {
     const out = uc.querySelector('#upd-out');
     out.textContent = 'Checking…';
@@ -1373,15 +1385,25 @@ async function loadSettings() {
   });
 
   // --- About ---
-  const ac = settingsCard('About', '', 'general');
-  ac.appendChild(cardEl(`Xavani Desktop`, `engine ${s.engine_version || '?'} · python ${s.python || '?'}`, null, (() => {
+  const ac = settingsCard('About', 'Xavani Desktop is built and published by Enternovate.', 'general');
+  ac.appendChild(cardEl(`Xavani Desktop`, `engine ${s.engine_version || '?'} · python ${s.python || '?'} · by Enternovate`, null, (() => {
     const b = document.createElement('button');
     b.className = 'btn ghost sm';
     b.textContent = 'Reveal data folder';
     b.addEventListener('click', () => s.xavani_home && window.xavaniDesktop.revealPath(s.xavani_home));
     return b;
   })()));
+  const legalRow = document.createElement('div');
+  legalRow.className = 'set-row';
+  legalRow.innerHTML = `<span class="dim">Third-party notices and licenses (<span class="mono">THIRD_PARTY_NOTICES.md</span>) ship with Xavani Desktop.</span>
+    <button class="btn ghost sm" id="about-notices">Show notices</button>`;
+  ac.appendChild(legalRow);
   gen.appendChild(ac);
+  legalRow.querySelector('#about-notices').addEventListener('click', async () => {
+    const rt = await window.xavaniDesktop.runtime();
+    if (rt && rt.notices) window.xavaniDesktop.revealPath(rt.notices);
+    else notify('THIRD_PARTY_NOTICES.md was not found in this build.', { kind: 'info' });
+  });
 }
 
 /* ---------------- agent ops (loops · eval · diff · permissions) ---------------- */

@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('xavaniDesktop', {
   openExternal: (u) => ipcRenderer.invoke('open-external', u),
   setZoom: (z) => ipcRenderer.invoke('set-zoom', z),
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  setAutoUpdate: (enabled) => ipcRenderer.invoke('set-auto-update', enabled),
   onUpdateInfo: (cb) => ipcRenderer.on('update-info', (_e, info) => cb(info)),
   quit: () => ipcRenderer.send('app-quit'),
 });
