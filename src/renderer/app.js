@@ -547,6 +547,23 @@ async function consumeEvents(runId, block) {
   let renderQueued = false;
   let toolsBox = null;
   let reasoningBox = null;
+  // R1 10b: every parsed event is folded through the pure run-state reducer,
+  // and tool cards are keyed by tool_call_id — out-of-order or replayed
+  // events can no longer land on the wrong card.
+  let runState = window.XavaniRunState.initialRunState(runId);
+  const toolCards = new Map();
+
+  // A stream that ends without a terminal run event means the outcome is
+  // unknown. Say so, instead of letting the block finish as if it succeeded.
+  const noteStreamInterrupted = () => {
+    if (runState.status !== 'interrupted') return;
+    const note = document.createElement('div');
+    note.className = 'stream-warning';
+    note.style.cssText = 'margin-top:6px;color:var(--red);font-size:12px;';
+    note.textContent = '⚠ stream ended early — run state unknown; do not assume success.';
+    block.appendChild(note);
+    scrollBottom();
+  };
 
   const toolsContainer = () => {
     if (!toolsBox) {
@@ -614,18 +631,29 @@ async function consumeEvents(runId, block) {
       if (!dataLine) continue;
       let evt;
       try { evt = JSON.parse(dataLine.slice(5).trim()); } catch { continue; }
+      runState = window.XavaniRunState.applyRunEvent(runState, evt);
 
       switch (evt.event) {
         case 'message.delta':
           acc += evt.delta || '';
           schedulePaint();
           break;
-        case 'tool.started':
-          evt._card = addToolCard(evt);
+        case 'tool.started': {
+          const card = addToolCard(evt);
+          if (card && typeof evt.tool_call_id === 'string' && evt.tool_call_id) {
+            card._toolCallId = evt.tool_call_id;
+            toolCards.set(evt.tool_call_id, card);
+          }
           agentTouchedFile(evt);
           break;
+        }
         case 'tool.completed': {
-          const card = evt._card || toolsBox && toolsBox.lastElementChild;
+          // Identity first: the card for this exact tool call, never "the
+          // last card in the box" — completions can arrive out of order.
+          const id = typeof evt.tool_call_id === 'string' && evt.tool_call_id ? evt.tool_call_id : null;
+          const card = id
+            ? (toolCards.get(id) || null)
+            : (evt._card || (toolsBox && toolsBox.lastElementChild));
           if (card) {
             card.classList.remove('running');
             card.classList.add(evt.error ? 'error' : 'done');
@@ -652,6 +680,12 @@ async function consumeEvents(runId, block) {
       }
     }
   }
+
+  // The reader is done — clean EOF or a read error, both leave us here.
+  // endRunStream() is a no-op when the run already reported a terminal
+  // status; otherwise the stream was cut short and we say so, loudly.
+  runState = window.XavaniRunState.endRunStream(runState);
+  noteStreamInterrupted();
 
   const finalBlock = await api(`/v1/runs/${runId}`).then((r) => r.json()).catch(() => null);
   if (finalBlock && finalBlock.output && !acc.trim()) acc = finalBlock.output;
