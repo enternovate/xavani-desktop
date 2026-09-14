@@ -818,7 +818,7 @@ def build_desktop_app(api_port: int):
     MIG_LABELS = {
         "claude_code": "Claude Code",
         "codex": "Codex",
-        "hermes": "Hermes",
+        "hermes": "Legacy Agent",
         "cursor": "Cursor",
         "gemini": "Gemini CLI",
         "opencode": "OpenCode",

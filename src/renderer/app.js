@@ -1994,7 +1994,7 @@ async function submitTranscription(blob) {
 const WIZ_SOURCES = [
   { id: 'claude_code', label: 'Claude Code' },
   { id: 'codex', label: 'Codex CLI' },
-  { id: 'hermes', label: 'Hermes Agent' },
+  { id: 'hermes', label: 'Legacy Agent' },
   { id: 'cursor', label: 'Cursor' },
 ];
 
@@ -3310,7 +3310,7 @@ function setupDockResize() {
 const MIG_LABELS = {
   claude_code: 'Claude Code',
   codex: 'OpenAI Codex CLI',
-  hermes: 'Hermes Agent',
+  hermes: 'Legacy Agent',
   cursor: 'Cursor',
   gemini: 'Gemini CLI',
   opencode: 'OpenCode',
