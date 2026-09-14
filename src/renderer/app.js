@@ -2160,24 +2160,19 @@ async function openWizard() {
     },
     {
       title: 'Set your workspace',
-      sub: 'Default folder for the file explorer and Studio. Use ~ for home.',
+      sub: 'Default folder for the file explorer and Studio. Continue opens the native folder picker.',
       body: () => `<div class="wiz-title">Set your workspace</div>
         <div class="wiz-sub">${steps[4].sub}</div>
-        ${wizField('Workspace root', '<input id="wz-root" class="mono" placeholder="~/projects">')}
+        ${wizField('Workspace root', '<input id="wz-root" class="mono" placeholder="not selected" readonly>')}
         <span id="wz-root-out" class="dim"></span>`,
       onshow: () => {
         dapi('/desktop/api/fs/root').then((r) => r.json()).then((d) => { $('#wz-root').value = d.root || ''; }).catch(() => {});
       },
       next: async () => {
-        const root = $('#wz-root').value.trim();
-        if (!root) return;
-        const res = await dapi('/desktop/api/fs/root', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ root }),
-        });
-        const d = await res.json();
-        if (d.error) throw new Error(d.error);
+        // A workspace grant is native-only: the renderer cannot POST fs/root.
+        const res = await window.xavaniDesktop.chooseWorkspace();
+        if (res && res.ok) { $('#wz-root').value = res.root; return; }
+        if (res && res.error) throw new Error(res.error);
       },
     },
     {
@@ -2711,28 +2706,38 @@ function setupStudio() {
   });
 }
 
-async function setWorkspaceRoot() {
-  const p = $('#ws-root').value.trim();
-  if (!p) return;
+/* The workspace root is granted natively (main-process dialog → POST fs/root
+   with X-Xavani-Native). A renderer POST to fs/root is refused by design. */
+async function chooseWorkspaceRoot() {
   try {
-    const res = await dapi('/desktop/api/fs/root', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ root: p }),
-    });
-    const d = await res.json();
-    if (d.error) { treeError(d.error); return; }
-    studio.root = d.root;
+    const res = await window.xavaniDesktop.chooseWorkspace();
+    if (!res || res.cancelled) return null;
+    if (!res.ok) { treeError(res.error || 'Workspace grant failed'); return null; }
+    studio.root = res.root;
     studio.expanded = {};
     studio.selectedDir = null;
-    renderTree(studio.root);
-  } catch (err) { treeError(String(err)); }
+    $('#ws-root').value = res.root;
+    renderTree(res.root);
+    return res;
+  } catch (err) { treeError(String(err)); return null; }
 }
+
+async function setWorkspaceRoot() {
+  await chooseWorkspaceRoot();
+}
+
+function workspaceRequired(d) { return !!d && d.error === 'Workspace required'; }
 
 async function loadWorkspaceRoot() {
   try {
     const res = await dapi('/desktop/api/fs/root');
     const d = await res.json();
+    if (workspaceRequired(d)) {
+      studio.root = null;
+      $('#ws-root').value = '';
+      treeError(d.error);
+      return;
+    }
     studio.root = d.root;
     $('#ws-root').value = d.root;
     renderTree(d.root);
@@ -2749,6 +2754,7 @@ async function renderTree(dir) {
   try {
     const res = await dapi(`/desktop/api/fs/tree?path=${encodeURIComponent(dir)}`);
     const d = await res.json();
+    if (workspaceRequired(d)) { studio.root = null; treeError(d.error); return; }
     if (d.error) { if (dir === studio.root) treeError(d.error); return; }
     const container = dir === studio.root ? box : box.querySelector(`[data-dir="${cssEscape(dir)}"]`);
     if (!container) return;
@@ -2829,6 +2835,7 @@ async function openFile(path) {
   try {
     const res = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(path)}`);
     const d = await res.json();
+    if (workspaceRequired(d)) { treeError(d.error); return; }
     if (d.error) { $('#save-state').textContent = d.error; return; }
     studio.tabs.push({ path, name: path.split('/').pop(), content: d.content, dirty: false });
     activateTab(path);
@@ -2889,6 +2896,7 @@ async function saveActiveFile() {
       body: JSON.stringify({ path: tab.path, content: tab.content }),
     });
     const d = await res.json();
+    if (workspaceRequired(d)) { treeError(d.error); return; }
     if (d.error) { $('#save-state').textContent = d.error; return; }
     tab.dirty = false;
     $('#save-state').textContent = `Saved ${new Date().toLocaleTimeString()}`;

@@ -1,12 +1,13 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, ipcMain, shell, session } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, session, dialog } = require('electron');
 const { spawn } = require('child_process');
 const { randomBytes } = require('node:crypto');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { controlRequest, trustedSender } = require('./security');
+const { buildGrantInit, parseGrantResponse } = require('./workspace-grant');
 
 const IS_MAC = process.platform === 'darwin';
 const IS_DEV = !!process.env.XAVANI_DESKTOP_DEV;
@@ -168,6 +169,67 @@ function sendToWindow(channel, payload) {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
 }
 
+/* ---------------- native workspace grant ---------------- */
+
+function expandHome(p) {
+  if (typeof p !== 'string') return '';
+  const raw = p.trim();
+  if (raw === '~') return app.getPath('home');
+  if (raw.startsWith('~/')) return path.join(app.getPath('home'), raw.slice(2));
+  return raw;
+}
+
+/**
+ * Grant the selected folder to the running backend as a native caller.
+ *
+ * POST /desktop/api/fs/root accepts a grant only when the per-run secret
+ * arrives in X-Xavani-Native (raw). The secret stays in this process: it is
+ * never handed to the renderer, and the renderer's webRequest injector adds
+ * Authorization only, so a page request can never satisfy the grant check.
+ */
+async function grantWorkspace(absPath) {
+  const generation = backendGeneration;
+  const port = backendInfo ? Number(backendInfo.desktop_port) : 0;
+  if (!controlSecret) return { ok: false, error: 'backend secret unavailable' };
+  if (!Number.isInteger(port) || port <= 0) return { ok: false, error: 'backend not ready' };
+  let init;
+  try {
+    init = buildGrantInit({ secret: controlSecret, root: expandHome(absPath) });
+  } catch (err) {
+    return { ok: false, error: err && err.message ? err.message : String(err) };
+  }
+  return new Promise((resolve) => {
+    let settled = false;
+    const settle = (result) => { if (!settled) { settled = true; resolve(result); } };
+    const req = http.request({
+      host: '127.0.0.1',
+      port,
+      path: '/desktop/api/fs/root',
+      method: init.method,
+      headers: {
+        ...init.headers,
+        // The surface auth middleware wants the bearer token; the grant route
+        // wants the raw header. Both come from the same per-run secret.
+        Authorization: 'Bearer ' + controlSecret,
+        'Content-Length': Buffer.byteLength(init.body),
+      },
+      timeout: 5000,
+    }, (res) => {
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        if (generation !== backendGeneration) { settle({ ok: false, error: 'backend restarted during the grant' }); return; }
+        let payload = null;
+        try { payload = JSON.parse(body); } catch {}
+        settle(parseGrantResponse(res.statusCode, payload));
+      });
+    });
+    req.on('error', (err) => settle({ ok: false, error: err && err.message ? err.message : String(err) }));
+    req.on('timeout', () => { req.destroy(); settle({ ok: false, error: 'workspace grant timed out' }); });
+    req.end(init.body);
+  });
+}
+
 /* ---------------- update check (GitHub releases, anonymous GET) ---------------- */
 
 const UPDATE_REPO = 'enternovate/xavani-desktop';
@@ -284,6 +346,13 @@ function createWindow() {
     try { spec = JSON.parse(process.env.XAVANI_DESKTOP_TEST); } catch {}
     const wait = (ms) => new Promise((r) => setTimeout(r, ms));
     (async () => {
+      if (spec.grant) {
+        // Dev-only: drive the real grant route without a native dialog.
+        const deadline = Date.now() + 20000;
+        while (!backendInfo && Date.now() < deadline) await wait(200);
+        const granted = await grantWorkspace(String(spec.grant));
+        console.log('[test] grant:', JSON.stringify(granted));
+      }
       await wait(spec.scriptDelay || 2500);
       if (spec.script) {
         await mainWindow.webContents.executeJavaScript(spec.script).catch((e) => console.error('[test-script]', e));
@@ -384,6 +453,24 @@ if (!gotLock) {
     ipcMain.handle('check-for-updates', (event) => {
       if (!trustedSender(event, mainWindow)) return null;
       return checkForUpdates();
+    });
+    ipcMain.handle('choose-workspace', async (event) => {
+      if (!trustedSender(event, mainWindow)) return null;
+      const picked = await dialog.showOpenDialog(mainWindow, {
+        title: 'Choose a workspace folder',
+        properties: ['openDirectory'],
+      });
+      if (!picked || picked.canceled || !Array.isArray(picked.filePaths) || !picked.filePaths.length) {
+        return { cancelled: true };
+      }
+      const result = await grantWorkspace(picked.filePaths[0]);
+      if (!result.ok) {
+        // The secret is never logged; the route's refusal text is enough.
+        console.error('[xavani] workspace grant refused:', result.error);
+        return result;
+      }
+      sendToWindow('workspace-granted', { root: result.root });
+      return result;
     });
 
     createWindow();
