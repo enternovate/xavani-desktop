@@ -176,8 +176,15 @@ def _installed_skills() -> list[dict]:
     return out
 
 
-def build_desktop_app(api_port: int):
+def build_desktop_app(api_port: int, secret: str):
     from aiohttp import web
+
+    try:
+        from backend.desktop_auth import desktop_auth
+    except ImportError:
+        # Launched as a script (Electron passes an absolute path): backend/
+        # itself is sys.path[0], so the package form does not resolve.
+        from desktop_auth import desktop_auth
 
     routes = web.RouteTableDef()
 
@@ -1441,12 +1448,41 @@ def build_desktop_app(api_port: int):
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
 
-    app = web.Application()
+    app = web.Application(middlewares=[desktop_auth(secret)])
     app.add_routes(routes)
     return app
 
 
+_BOOTSTRAP_SECRET_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _read_bootstrap_secret(stream) -> str:
+    """Read the single-line JSON bootstrap secret from ``stream``."""
+    line = stream.readline()
+    if not line:
+        raise ValueError("empty bootstrap stream")
+    try:
+        payload = json.loads(line)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+        raise ValueError("bootstrap line is not JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("bootstrap payload must be a JSON object")
+    secret = payload.get("secret")
+    if not isinstance(secret, str) or not _BOOTSTRAP_SECRET_RE.fullmatch(secret):
+        raise ValueError("bootstrap secret must be 64 lowercase hex characters")
+    return secret
+
+
 async def main() -> None:
+    try:
+        secret = _read_bootstrap_secret(sys.stdin)
+    except ValueError:
+        print(json.dumps({
+            "ready": False,
+            "error": "desktop bootstrap secret missing or malformed",
+        }), flush=True)
+        raise SystemExit(1)
+
     from gateway.config import PlatformConfig
     from gateway.platforms.api_server import APIServerAdapter, check_api_server_requirements
 
@@ -1460,7 +1496,12 @@ async def main() -> None:
 
     adapter = APIServerAdapter(PlatformConfig(
         enabled=True,
-        extra={"host": "127.0.0.1", "port": api_port},
+        extra={
+            "host": "127.0.0.1",
+            "port": api_port,
+            "key": secret,
+            "cors_origins": ["null"],
+        },
     ))
     if not await adapter.connect():
         print(json.dumps({"ready": False, "error": "api server failed to start"}), flush=True)
@@ -1480,7 +1521,7 @@ async def main() -> None:
 
     from aiohttp import web
 
-    runner = web.AppRunner(build_desktop_app(api_port))
+    runner = web.AppRunner(build_desktop_app(api_port, secret))
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", desktop_port)
     await site.start()
