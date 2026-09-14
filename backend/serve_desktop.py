@@ -1632,6 +1632,20 @@ def build_desktop_app(api_port: int, secret: str):
             return web.json_response({"error": "the workflow has nothing to load"})
         return web.json_response({"ok": True, "workflow_id": spec["id"], "message": message})
 
+    # ---------------- work timeline (task 22) ----------------
+
+    @routes.get("/desktop/api/timeline")
+    async def timeline_state(_request: "web.Request") -> "web.Response":
+        try:
+            from agent.work_timeline import latest_timeline_file, read_timeline
+
+            path = latest_timeline_file()
+            if path is None:
+                return web.json_response({"session": "", "events": []})
+            return web.json_response({"session": path.stem, "events": read_timeline(path)})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)})
+
     # ---------------- voice transcription ----------------
 
     def _read_env_key(name: str) -> str:

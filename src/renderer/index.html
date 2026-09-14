@@ -205,6 +205,7 @@
           <button class="dock-tab active" id="tab-preview" data-docktab="preview">Preview</button>
           <button class="dock-tab" id="tab-todo" data-docktab="todo">To-Do</button>
           <button class="dock-tab" id="tab-business" data-docktab="business">Business</button>
+          <button class="dock-tab" id="tab-timeline" data-docktab="timeline">Timeline</button>
         </div>
         <button id="dock-flip" class="btn ghost sm" title="Flip between Preview and the last changed file (⌘⌥F)" aria-disabled="false">⇄ Preview / Files</button>
         <input id="dock-url" class="mono" placeholder="http://localhost:3000" value="http://localhost:3000">
@@ -236,6 +237,15 @@
           <div class="biz-section"><div class="biz-section-head">Checks</div><div id="biz-checks" class="biz-list"></div></div>
           <div class="biz-section"><div class="biz-section-head">Approvals</div><div id="biz-approvals" class="biz-list"></div></div>
           <div class="biz-section"><div class="biz-section-head">Outstanding work</div><div id="biz-outstanding" class="biz-list"></div></div>
+        </div>
+        <div id="dock-timelineview" class="hidden">
+          <div class="tl-controls">
+            <span id="tl-session" class="mono dim"></span>
+            <span class="flex-spacer"></span>
+            <button id="tl-replay" class="btn ghost sm" title="Re-render the recorded events — replay is read-only">Replay</button>
+            <button id="tl-export" class="btn ghost sm" title="Export the timeline with a native save dialog">Export</button>
+          </div>
+          <div id="tl-events" class="tl-events"></div>
         </div>
         <div id="dock-fileview" class="hidden">
           <div id="dock-filepath" class="mono"></div>
@@ -312,6 +322,7 @@
   <script src="run-state.js"></script>
   <script src="workbench-state.js"></script>
   <script src="business-view.js"></script>
+  <script src="timeline.js"></script>
   <script src="vendor/monaco.bundle.js"></script>
   <script src="editor-adapter.js"></script>
   <script src="app.js"></script>

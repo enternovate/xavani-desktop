@@ -163,6 +163,16 @@ async function launchWorkbench(options = {}) {
     }
   }
 
+  if (opts.seedTimeline) {
+    const sessionsDir = path.join(home, 'sessions');
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const lines = (opts.seedTimeline.events || []).map((event) => JSON.stringify(event));
+    fs.writeFileSync(
+      path.join(sessionsDir, 'session_run_e2e.timeline.jsonl'),
+      lines.join('\n') + (lines.length ? '\n' : ''),
+    );
+  }
+
   const beforeBackends = serveDesktopPids();
   const app = await electronApp.launch({
     args: ['.'],

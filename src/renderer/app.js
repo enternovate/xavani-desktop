@@ -3659,18 +3659,106 @@ async function runBusinessWorkflow() {
   }
 }
 
+/* ---------------- work timeline view (R2 Task 22) ---------------- */
+
+state.timeline = state.timeline || { session: '', events: [] };
+
+async function loadTimeline() {
+  const events = $('#tl-events');
+  if (!events) return;
+  const replayBtn = $('#tl-replay');
+  const exportBtn = $('#tl-export');
+  if (replayBtn && !replayBtn.dataset.bound) {
+    replayBtn.dataset.bound = '1';
+    replayBtn.addEventListener('click', replayTimeline);
+  }
+  if (exportBtn && !exportBtn.dataset.bound) {
+    exportBtn.dataset.bound = '1';
+    exportBtn.addEventListener('click', exportTimeline);
+  }
+  try {
+    const res = await dapi('/desktop/api/timeline');
+    const d = await res.json();
+    if (d.error) { events.innerHTML = `<div class="empty">${escapeHtml(d.error)}</div>`; return; }
+    state.timeline = {
+      session: d.session || '',
+      events: window.XavaniTimeline.sortedByTime(d.events || []),
+    };
+    renderTimeline();
+  } catch (err) {
+    events.innerHTML = `<div class="empty">Timeline unavailable: ${escapeHtml(String(err))}</div>`;
+  }
+}
+
+function renderTimeline() {
+  const data = state.timeline || { session: '', events: [] };
+  const session = $('#tl-session');
+  if (session) session.textContent = data.session || '';
+  const wrap = $('#tl-events');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!data.events.length) {
+    wrap.innerHTML = '<div class="empty">No events recorded yet.</div>';
+    return;
+  }
+  for (const event of data.events) {
+    const row = document.createElement('div');
+    row.className = `tl-item tl-${String(event.type || '').replace(/\./g, '-')}`;
+    const when = document.createElement('span');
+    when.className = 'tl-time mono';
+    when.textContent = new Date(((event && event.ts) || 0) * 1000).toLocaleTimeString();
+    const title = document.createElement('span');
+    title.className = 'tl-title';
+    title.textContent = window.XavaniTimeline.eventTitle(event);
+    const detail = document.createElement('span');
+    detail.className = 'tl-detail mono dim';
+    detail.textContent = window.XavaniTimeline.eventDetail(event);
+    row.append(when, title, detail);
+    wrap.appendChild(row);
+  }
+}
+
+// Read-only replay: re-render from recorded copies; never dispatches work.
+function replayTimeline() {
+  const current = state.timeline || { session: '', events: [] };
+  state.timeline = { session: current.session, events: window.XavaniTimeline.replayable(current.events) };
+  renderTimeline();
+  toast('Timeline replay is read-only.');
+}
+
+async function exportTimeline() {
+  const data = state.timeline || { session: '', events: [] };
+  const bridge = window.xavaniDesktop && window.xavaniDesktop.exportTimeline;
+  if (!bridge) { toast('Export needs the desktop app.'); return; }
+  const payload = {
+    defaultName: `xavani-timeline-${(data.session || 'session').replace(/[^a-z0-9-_.]/gi, '')}.json`,
+    content: JSON.stringify(
+      { session: data.session || '', events: window.XavaniTimeline.replayable(data.events || []) },
+      null,
+      2,
+    ),
+  };
+  const result = await bridge(payload).catch(() => null);
+  if (!result || result.canceled) return;
+  if (result.error) { toast(`Export failed: ${result.error}`); return; }
+  toast(`Timeline exported to ${result.filePath}`);
+}
+
 // The dock head tabs (Preview / To-Do) render from the reducer's tab group,
 // so the highlight can never disagree with the dock's state.
 function renderDockHead() {
   const files = wb.dockTab === 'files';
   const todo = dockState.active === 'todo';
   const business = dockState.active === 'business';
+  const timeline = dockState.active === 'timeline';
   const preview = $('#tab-preview');
   const todoBtn = $('#tab-todo');
   const bizBtn = $('#tab-business');
-  if (preview) preview.classList.toggle('active', !todo && !business && !files);
+  const tlBtn = $('#tab-timeline');
+  if (preview) preview.classList.toggle('active', !todo && !business && !timeline && !files);
   if (todoBtn) todoBtn.classList.toggle('active', todo);
   if (bizBtn) bizBtn.classList.toggle('active', business);
+  if (tlBtn) tlBtn.classList.toggle('active', timeline);
 }
 
 function renderDockTabs() {
@@ -3709,7 +3797,7 @@ function renderDockTabs() {
 function setDockTab(id) {
   const prev = dockState.active;
   // Remember the file pane's scroll before leaving it.
-  if (prev && prev !== 'preview' && prev !== 'todo' && prev !== 'business') {
+  if (prev && prev !== 'preview' && prev !== 'todo' && prev !== 'business' && prev !== 'timeline') {
     const sc = $('#dock-filescroll');
     if (sc) dockState.scrollTops[prev] = sc.scrollTop;
   }
@@ -3717,16 +3805,19 @@ function setDockTab(id) {
   const isPreview = id === 'preview';
   const isTodo = id === 'todo';
   const isBusiness = id === 'business';
+  const isTimeline = id === 'timeline';
   // The tab group is the reducer's; To-Do is a legacy extra view.
   if (isPreview) wbDispatch({ type: 'dock-tab', tab: 'preview' });
-  else if (!isTodo && !isBusiness) wbDispatch({ type: 'dock-tab', tab: 'files' });
+  else if (!isTodo && !isBusiness && !isTimeline) wbDispatch({ type: 'dock-tab', tab: 'files' });
   if (prev !== id) wbFade($('.dock-body'));
   $('#dock-webview').style.display = (isPreview && !isTodo) ? '' : 'none';
   $('#dock-todoview').classList.toggle('hidden', !isTodo);
   $('#dock-businessview').classList.toggle('hidden', !isBusiness);
-  $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo || isBusiness);
+  $('#dock-timelineview').classList.toggle('hidden', !isTimeline);
+  $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo || isBusiness || isTimeline);
   $('#dock-hint').style.display = (isPreview && !isTodo && !state.dockNavigated) ? '' : 'none';
   if (isBusiness) loadBusinessState();
+  if (isTimeline) loadTimeline();
   $('.dock-bar').classList.toggle('in-todo', isTodo);
   renderDockTabs();
   if (isTodo) loadTodos();

@@ -478,6 +478,22 @@ if (!gotLock) {
       if (!trustedSender(event, mainWindow)) return null;
       return autoUpdate.setEnabled(enabled);
     });
+    ipcMain.handle('timeline-export', async (event, payload) => {
+      if (!trustedSender(event, mainWindow)) return { canceled: true };
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: (payload && payload.defaultName) || 'xavani-timeline.json',
+        filters: [{ name: 'Timeline JSON', extensions: ['json'] }],
+      });
+      if (canceled || !filePath) return { canceled: true };
+      try {
+        const fsx = require('node:fs');
+        await fsx.promises.writeFile(filePath, String((payload && payload.content) || ''), 'utf-8');
+        return { canceled: false, filePath };
+      } catch (err) {
+        return { canceled: false, error: String(err) };
+      }
+    });
+
     ipcMain.handle('choose-workspace', async (event) => {
       if (!trustedSender(event, mainWindow)) return null;
       const picked = await dialog.showOpenDialog(mainWindow, {

@@ -249,3 +249,16 @@ body.wb-resizing { user-select: none; }
 .biz-item.denied { color: #ff8f8f; }
 .biz-item.failed { color: #ffc46b; }
 .biz-decision { margin-left: 6px; }
+
+/* ---------- work timeline (task 22) ---------- */
+
+#dock-timelineview { display: flex; flex-direction: column; gap: 6px; overflow: auto; padding: 8px; height: 100%; }
+#dock-timelineview.hidden { display: none; }
+.tl-controls { display: flex; gap: 6px; align-items: center; }
+.tl-events { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.tl-item { display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; border-radius: var(--workbench-radius); }
+.tl-item .tl-time { color: var(--workbench-muted); flex-shrink: 0; font-size: 10px; }
+.tl-item .tl-title { flex-shrink: 0; }
+.tl-item .tl-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-task-blocked .tl-title,
+.tl-tool-completed.tl-failed .tl-title { color: #ff8f8f; }
