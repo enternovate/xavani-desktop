@@ -2679,7 +2679,7 @@ function setupStudio() {
   $('#fs-refresh').addEventListener('click', () => renderTree(studio.root));
   $('#fs-newfile').addEventListener('click', () => fsCreate('newfile'));
   $('#fs-newdir').addEventListener('click', () => fsCreate('mkdir'));
-  $('#editor-save').addEventListener('click', saveActiveFile);
+  $('#editor-save').addEventListener('click', () => saveActiveFile());
 
   const editor = $('#editor');
   editor.addEventListener('input', () => {
@@ -2837,7 +2837,7 @@ async function openFile(path) {
     const d = await res.json();
     if (workspaceRequired(d)) { treeError(d.error); return; }
     if (d.error) { $('#save-state').textContent = d.error; return; }
-    studio.tabs.push({ path, name: path.split('/').pop(), content: d.content, dirty: false });
+    studio.tabs.push({ path, name: path.split('/').pop(), content: d.content, base: d.content, revision: d.revision || '', dirty: false });
     activateTab(path);
   } catch (err) { $('#save-state').textContent = String(err); }
 }
@@ -2885,23 +2885,88 @@ function syncGutter() {
   g.scrollTop = $('#editor').scrollTop;
 }
 
-async function saveActiveFile() {
+async function saveActiveFile(force) {
   const tab = activeTab();
   if (!tab) return;
   tab.content = $('#editor').value;
+  // The save carries the exact revision the buffer was based on.  A forced
+  // overwrite (the conflict view) supplies the current disk revision instead.
+  const expected = (force && force.revision) || tab.revision;
+  if (!expected) { $('#save-state').textContent = 'No revision — reopen the file'; return; }
   try {
     const res = await dapi('/desktop/api/fs/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: tab.path, content: tab.content }),
+      body: JSON.stringify({ path: tab.path, content: tab.content, expected_revision: expected }),
     });
     const d = await res.json();
     if (workspaceRequired(d)) { treeError(d.error); return; }
+    if (res.status === 409) {
+      // The disk moved under the buffer: nothing was written, the buffer stays
+      // dirty, and the conflict review shows base / buffer / disk.
+      tab.dirty = true;
+      renderTabs();
+      $('#save-state').textContent = 'Conflict — file changed on disk';
+      let disk = d.disk, revision = d.current_revision;
+      if (disk == null) {
+        try {
+          const again = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(tab.path)}`);
+          const fresh = await again.json();
+          if (!fresh.error) { disk = fresh.content; revision = fresh.revision; }
+        } catch { /* keep the empty disk pane */ }
+      }
+      showConflict(tab, disk == null ? '' : disk, revision || '');
+      return;
+    }
     if (d.error) { $('#save-state').textContent = d.error; return; }
+    tab.revision = d.revision || '';
+    tab.base = tab.content;
     tab.dirty = false;
+    clearConflict();
     $('#save-state').textContent = `Saved ${new Date().toLocaleTimeString()}`;
     renderTabs();
   } catch (err) { $('#save-state').textContent = String(err); }
+}
+
+function clearConflict() {
+  const box = $('#conflict-view');
+  if (box) box.remove();
+}
+
+function showConflict(tab, disk, diskRevision) {
+  clearConflict();
+  const box = document.createElement('div');
+  box.id = 'conflict-view';
+  box.className = 'conflict-view mono';
+  box.style.cssText = 'position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;gap:8px;padding:12px;background:#0d0f11;overflow:auto';
+  box.innerHTML = `
+    <div style="color:#f0b429">⚠ ${escapeHtml(tab.name)} changed on disk. Your buffer was not saved.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;min-height:120px">
+      <section style="display:flex;flex-direction:column;min-width:0"><h4 style="margin:0 0 4px">Base (loaded)</h4><pre class="cf-base" style="margin:0;overflow:auto;max-height:240px;white-space:pre-wrap"></pre></section>
+      <section style="display:flex;flex-direction:column;min-width:0"><h4 style="margin:0 0 4px">Buffer (yours)</h4><pre class="cf-buffer" style="margin:0;overflow:auto;max-height:240px;white-space:pre-wrap"></pre></section>
+      <section style="display:flex;flex-direction:column;min-width:0"><h4 style="margin:0 0 4px">Disk (external)</h4><pre class="cf-disk" style="margin:0;overflow:auto;max-height:240px;white-space:pre-wrap"></pre></section>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button id="cf-keep" class="btn sm">Overwrite disk with my buffer</button>
+      <button id="cf-reload" class="btn ghost sm">Discard mine, reload disk</button>
+      <button id="cf-dismiss" class="btn ghost sm">Keep editing</button>
+    </div>`;
+  box.querySelector('.cf-base').textContent = tab.base == null ? '' : tab.base;
+  box.querySelector('.cf-buffer').textContent = tab.content;
+  box.querySelector('.cf-disk').textContent = disk;
+  box.querySelector('#cf-keep').addEventListener('click', () => saveActiveFile({ revision: diskRevision }));
+  box.querySelector('#cf-reload').addEventListener('click', () => {
+    tab.content = disk;
+    tab.base = disk;
+    tab.revision = diskRevision;
+    tab.dirty = false;
+    clearConflict();
+    activateTab(tab.path);
+    $('#save-state').textContent = 'Reloaded from disk';
+    renderTabs();
+  });
+  box.querySelector('#cf-dismiss').addEventListener('click', clearConflict);
+  $('#editor-wrap').appendChild(box);
 }
 
 function fsCreate(op) {

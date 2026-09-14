@@ -210,6 +210,25 @@ def build_desktop_app(api_port: int, secret: str):
             native_grant,
         )
 
+    try:
+        from backend.workspace_files import (
+            MAX_TEXT_BYTES,
+            FileTooLarge,
+            RevisionConflict,
+            RevisionRequired,
+            read_workspace_file,
+            save_workspace_file,
+        )
+    except ImportError:
+        from workspace_files import (  # type: ignore[no-redef]
+            MAX_TEXT_BYTES,
+            FileTooLarge,
+            RevisionConflict,
+            RevisionRequired,
+            read_workspace_file,
+            save_workspace_file,
+        )
+
     # One boundary per desktop app: the single selected workspace root.  It
     # starts empty — only a native grant (POST /desktop/api/fs/root with the
     # X-Xavani-Native header) may set it.
@@ -1339,45 +1358,91 @@ def build_desktop_app(api_port: int, secret: str):
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
-    _MAX_FILE_BYTES = 2 * 1024 * 1024
+    # Upper bound on the request body for a text save, checked before the body
+    # is read: an oversized write is refused before allocation can grow without
+    # bound.  aiohttp's own client_max_size is the second backstop.
+    _MAX_WRITE_REQUEST_BYTES = MAX_TEXT_BYTES + 64 * 1024
 
     @routes.get("/desktop/api/fs/file")
     async def fs_file(request: "web.Request") -> "web.Response":
+        raw = request.query.get("path", "")
         try:
-            path = boundary.resolve(request.query.get("path", ""))
-            if not path.is_file():
-                return web.json_response({"error": f"not a file: {path}"}, status=404)
-            size = path.stat().st_size
-            if size > _MAX_FILE_BYTES:
-                return web.json_response({"error": f"file too large ({size} bytes)"}, status=413)
-            blob = path.read_bytes()
-            try:
-                text = blob.decode("utf-8")
-            except UnicodeDecodeError:
-                return web.json_response({"error": "binary file — not editable here"}, status=415)
-            return web.json_response({"path": str(path), "content": text, "size": size})
+            # The boundary authorises the path; the read then reports the exact
+            # bytes on disk and their SHA-256 revision, which a save must echo.
+            result = read_workspace_file(boundary.require_root(), raw)
         except WORKSPACE_ERRORS as exc:
             return _fs_error(exc)
+        except FileNotFoundError:
+            return web.json_response({"error": f"not a file: {raw}"}, status=404)
+        except FileTooLarge as exc:
+            return web.json_response({"error": str(exc)}, status=413)
+        except UnicodeDecodeError:
+            return web.json_response({"error": "binary file — not editable here"}, status=415)
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(result)
 
     @routes.post("/desktop/api/fs/write")
     async def fs_write(request: "web.Request") -> "web.Response":
+        declared = request.content_length
+        if declared is not None and declared > _MAX_WRITE_REQUEST_BYTES:
+            return web.json_response({"error": "content too large"}, status=413)
         try:
             body = await request.json()
-            path = boundary.resolve(body.get("path", ""), write=True)
-            content = str(body.get("content", ""))
-            if len(content.encode("utf-8")) > _MAX_FILE_BYTES:
+        except Exception as exc:
+            if "EntityTooLarge" in type(exc).__name__:
                 return web.json_response({"error": "content too large"}, status=413)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-            return web.json_response({"ok": True, "path": str(path), "bytes": len(content.encode("utf-8"))})
+            return web.json_response({"error": "invalid body"}, status=400)
+        raw = body.get("path", "")
+        root = None
+        try:
+            # Authorise first so a traversal or a protected path keeps its own
+            # 400/403 even when the expected revision is missing too.
+            boundary.resolve(raw, write=True)
+            root = boundary.require_root()
+            expected = body.get("expected_revision")
+            if not isinstance(expected, str) or not expected:
+                # A save always carries the revision its buffer read.  A missing
+                # revision is never permission to overwrite.
+                return web.json_response({"error": "An expected revision is required."}, status=428)
+            content = body.get("content", "")
+            if not isinstance(content, str):
+                return web.json_response({"error": "content must be a string"}, status=400)
+            result = save_workspace_file(root, raw, content, expected)
+        except RevisionConflict:
+            # The buffer is behind the disk: change nothing and hand the caller
+            # both sides so a conflict review can show disk, buffer and base.
+            disk: dict = {}
+            try:
+                disk = read_workspace_file(boundary.require_root(), raw)
+            except Exception:
+                disk = {}
+            return web.json_response({
+                "error": "The file changed on disk since it was read.",
+                "conflict": True,
+                "current_revision": disk.get("revision"),
+                "disk": disk.get("content"),
+            }, status=409)
         except WORKSPACE_ERRORS as exc:
             return _fs_error(exc)
+        except FileNotFoundError:
+            return web.json_response({"error": f"not a file: {raw}"}, status=404)
+        except FileTooLarge as exc:
+            return web.json_response({"error": str(exc)}, status=413)
+        except RevisionRequired as exc:
+            return web.json_response({"error": str(exc)}, status=428)
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response({
+            "ok": True, "path": result["path"], "revision": result["revision"],
+            "bytes": result["bytes"],
+        })
 
     # ---------------- voice transcription ----------------
 
