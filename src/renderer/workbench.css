@@ -262,3 +262,16 @@ body.wb-resizing { user-select: none; }
 .tl-item .tl-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-task-blocked .tl-title,
 .tl-tool-completed.tl-failed .tl-title { color: #ff8f8f; }
+
+/* ---------- capture controls (task 23) ---------- */
+
+#rec-state { font-size: 10px; }
+.rec-picker {
+  position: fixed; top: 44px; right: 16px; z-index: 60;
+  background: var(--workbench-panel); color: var(--workbench-text);
+  border: 1px solid var(--workbench-border); border-radius: var(--workbench-radius);
+  padding: 6px; display: flex; flex-direction: column; gap: 4px;
+  max-width: 340px; max-height: 300px; overflow: auto;
+}
+.rec-picker.hidden { display: none; }
+.rec-picker .rec-source { text-align: left; }

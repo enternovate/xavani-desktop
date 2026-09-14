@@ -252,6 +252,7 @@ async function init() {
   loadPrefs();
   setupWorkbench();
   setupDock();
+  initCaptureControls();
   initMonacoEditor();
   setupStudio();
   wireComposerClean();
@@ -3657,6 +3658,125 @@ async function runBusinessWorkflow() {
     if (input) { input.value = d.message; input.focus(); }
     toast('Workflow request staged in the chat.');
   }
+}
+
+/* ---------------- capture controls (R2 Task 23) ----------------
+   Explicit start only: idle requests nothing, the picker is a user
+   gesture, and the main-process adapter owns permissions + the temp file. */
+
+let captureControls = null;
+
+function renderCaptureState(s) {
+  const main = $('#rec-main');
+  const stop = $('#rec-stop');
+  const disc = $('#rec-discard');
+  const label = $('#rec-state');
+  if (!main) return;
+  const show = (el, on) => { if (el) el.classList.toggle('hidden', !on); };
+  const labels = {
+    idle: '',
+    requesting: 'requesting…',
+    recording: '● recording',
+    paused: '⏸ paused',
+    stopped: 'stopped — save or discard',
+    saved: 'saved',
+    failed: 'failed',
+  };
+  if (label) label.textContent = Object.prototype.hasOwnProperty.call(labels, s) ? labels[s] : (s || '');
+  main.textContent = s === 'recording' ? '⏸ Pause'
+    : s === 'paused' ? '▶ Resume'
+      : (s === 'stopped' || s === 'saved') ? 'Save…'
+        : '● Capture';
+  show(stop, s === 'recording' || s === 'paused');
+  show(disc, s === 'stopped' || s === 'failed');
+  if (s === 'idle' || s === 'saved' || s === 'failed') closeCapturePicker();
+}
+
+function closeCapturePicker() {
+  const picker = $('#rec-picker');
+  if (picker) picker.classList.add('hidden');
+}
+
+async function openCapturePicker() {
+  const picker = $('#rec-picker');
+  if (!picker || !captureControls) return;
+  picker.innerHTML = '<div class="empty">Loading sources…</div>';
+  picker.classList.remove('hidden');
+  const cancel = document.createElement('button');
+  cancel.className = 'btn ghost sm rec-source';
+  cancel.id = 'rec-cancel';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', closeCapturePicker);
+  let sources = [];
+  try {
+    sources = await captureControls.listSources();
+    if (!Array.isArray(sources)) sources = [];
+  } catch { sources = []; }
+  picker.innerHTML = '';
+  if (!sources.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No capture sources available.';
+    picker.appendChild(empty);
+  }
+  for (const source of sources) {
+    const btn = document.createElement('button');
+    btn.className = 'btn ghost sm rec-source';
+    btn.textContent = source.name;
+    btn.addEventListener('click', () => {
+      closeCapturePicker();
+      captureControls.start(source.id);
+    });
+    picker.appendChild(btn);
+  }
+  picker.appendChild(cancel);
+}
+
+function initCaptureControls() {
+  const main = $('#rec-main');
+  if (!main || !window.XavaniRecordingControls || !window.xavaniDesktop) return;
+  captureControls = window.XavaniRecordingControls.createRecordingControls({
+    bridge: {
+      listSources: () => window.xavaniDesktop.listCaptureSources(),
+      startCapture: (id) => window.xavaniDesktop.startCapture(id),
+      writeChunk: (buf) => window.xavaniDesktop.writeCaptureChunk(buf),
+      stopCapture: () => window.xavaniDesktop.stopCapture(),
+      saveCapture: () => window.xavaniDesktop.saveCapture(),
+      discardCapture: () => window.xavaniDesktop.discardCapture(),
+    },
+    onState: (s) => renderCaptureState(s),
+    onError: (msg) => toast(msg),
+  });
+  main.addEventListener('click', () => {
+    const s = captureControls.currentState();
+    if (s === 'idle') openCapturePicker();
+    else if (s === 'recording') captureControls.pause();
+    else if (s === 'paused') captureControls.resume();
+    else if (s === 'stopped') captureControls.save();
+    else if (s === 'saved') captureControls.discard().then(() => openCapturePicker());
+  });
+  const stopBtn = $('#rec-stop');
+  if (stopBtn) stopBtn.addEventListener('click', () => captureControls.stop());
+  const discBtn = $('#rec-discard');
+  if (discBtn) discBtn.addEventListener('click', () => captureControls.discard());
+  if (window.xavaniDesktop.onCaptureState) {
+    window.xavaniDesktop.onCaptureState((info) => {
+      if (info && info.state === 'stopped') {
+        const s = captureControls.currentState();
+        if (s === 'recording' || s === 'paused') captureControls.limitReached();
+      }
+    });
+  }
+  // A secret-capable dialog pauses capture while it is open.
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) {
+    new MutationObserver(() => {
+      captureControls.notifyDialog(!backdrop.classList.contains('hidden'));
+    }).observe(backdrop, { attributes: true, attributeFilter: ['class'] });
+  }
+  // Capture state survives backend restarts by design: nothing here or in
+  // the main adapter touches backend lifecycle.
+  renderCaptureState('idle');
 }
 
 /* ---------------- work timeline view (R2 Task 22) ---------------- */

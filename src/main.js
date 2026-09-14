@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, Menu, ipcMain, shell, session, dialog } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, session, dialog, desktopCapturer } = require('electron');
 const { spawn } = require('child_process');
 const { randomBytes } = require('node:crypto');
 const path = require('path');
@@ -492,6 +492,150 @@ if (!gotLock) {
       } catch (err) {
         return { canceled: false, error: String(err) };
       }
+    });
+
+    /* ---- capture adapter (task 23): OS permission + temp file owned here ---- */
+    const recording = require('./recording');
+    const fsMod = require('node:fs');
+    const pathMod = require('node:path');
+    let capture = null;
+    let pendingSourceId = '';
+
+    function captureSnapshot() {
+      if (!capture) return { state: 'idle', bytes: 0, elapsedMs: 0 };
+      return {
+        state: capture.state,
+        bytes: capture.bytes,
+        elapsedMs: Date.now() - capture.startedAt,
+        tempPath: capture.tempPath,
+      };
+    }
+
+    function captureEndStream() {
+      if (capture && capture.stream) {
+        try { capture.stream.end(); } catch { /* already closed */ }
+      }
+    }
+
+    try {
+      // The documented current flow: the main process answers a display
+      // media request with the user's chosen source. No capture and no OS
+      // prompt happens before an explicit Start gesture.
+      session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+        desktopCapturer.getSources({ types: ['screen', 'window'] })
+          .then((sources) => {
+            const chosen = sources.find((s) => s.id === pendingSourceId) || sources[0];
+            callback(chosen ? { video: chosen, audio: false } : {});
+          })
+          .catch(() => callback({}));
+      });
+    } catch { /* the session may not exist in some dev contexts */ }
+
+    ipcMain.handle('capture-sources', async (event) => {
+      if (!trustedSender(event, mainWindow)) return [];
+      try {
+        const sources = await desktopCapturer.getSources({ types: ['screen', 'window'] });
+        return sources.map((source) => ({ id: source.id, name: source.name }));
+      } catch (err) {
+        return { error: String(err) };
+      }
+    });
+
+    ipcMain.handle('capture-start', async (event, sourceId) => {
+      if (!trustedSender(event, mainWindow)) return { error: 'untrusted' };
+      if (capture) return { error: 'capture already active' };
+      if (!sourceId) return { error: 'select a capture source first' };
+      const tempDir = pathMod.join(app.getPath('temp'), 'xavani-capture');
+      fsMod.mkdirSync(tempDir, { recursive: true });
+      const tempPath = pathMod.join(tempDir, `capture-${Date.now()}.webm`);
+      capture = {
+        state: 'requesting',
+        bytes: 0,
+        startedAt: Date.now(),
+        tempPath,
+        stream: fsMod.createWriteStream(tempPath),
+        limitMonitor: null,
+      };
+      pendingSourceId = String(sourceId);
+      capture.limitMonitor = recording.createCaptureLimitMonitor({
+        getMeasurement: () => ({
+          elapsedMs: capture ? Date.now() - capture.startedAt : 0,
+          bytes: capture ? capture.bytes : 0,
+        }),
+        onLimit: () => {
+          if (!capture) return;
+          if (capture.state === 'recording' || capture.state === 'paused') {
+            captureEndStream();
+            capture.state = recording.transitionRecording(capture.state, 'limit');
+            sendToWindow('capture-state', captureSnapshot());
+          }
+        },
+      });
+      sendToWindow('capture-state', captureSnapshot());
+      return captureSnapshot();
+    });
+
+    ipcMain.handle('capture-chunk', async (event, chunk) => {
+      if (!trustedSender(event, mainWindow)) return { error: 'untrusted' };
+      if (!capture || !capture.stream) return { error: 'no active capture' };
+      if (capture.state === 'requesting') capture.state = recording.transitionRecording('requesting', 'granted');
+      const buffer = Buffer.from(chunk);
+      capture.bytes += buffer.byteLength;
+      const okToContinue = capture.stream.write(buffer); // bounded chunk writes
+      if (!okToContinue) {
+        await new Promise((resolve) => capture.stream.once('drain', resolve)); // backpressure
+      }
+      return { bytes: capture.bytes };
+    });
+
+    ipcMain.handle('capture-stop', (event) => {
+      if (!trustedSender(event, mainWindow)) return { error: 'untrusted' };
+      if (!capture) return captureSnapshot();
+      captureEndStream();
+      if (capture.limitMonitor) capture.limitMonitor.stop();
+      if (capture.state === 'recording' || capture.state === 'paused') {
+        capture.state = recording.transitionRecording(capture.state, 'stop');
+      }
+      sendToWindow('capture-state', captureSnapshot());
+      return captureSnapshot();
+    });
+
+    ipcMain.handle('capture-save', async (event) => {
+      if (!trustedSender(event, mainWindow)) return { canceled: true };
+      if (!capture || !capture.tempPath || !fsMod.existsSync(capture.tempPath)) {
+        return { canceled: false, error: 'no recording to save' };
+      }
+      const { canceled, filePath } = await dialog.showSaveDialog(mainWindow, {
+        defaultPath: 'xavani-capture.webm',
+        filters: [{ name: 'WebM video', extensions: ['webm'] }],
+      });
+      if (canceled || !filePath) {
+        // Cancelled save retains the temporary recording for retry or discard.
+        return { canceled: true };
+      }
+      try {
+        await fsMod.promises.copyFile(capture.tempPath, filePath);
+        captureEndStream();
+        await fsMod.promises.unlink(capture.tempPath).catch(() => {});
+        capture.state = 'saved';
+        sendToWindow('capture-state', captureSnapshot());
+        return { canceled: false, filePath };
+      } catch (err) {
+        return { canceled: false, error: String(err) };
+      }
+    });
+
+    ipcMain.handle('capture-discard', async (event) => {
+      if (!trustedSender(event, mainWindow)) return { error: 'untrusted' };
+      if (capture) {
+        captureEndStream();
+        if (capture.limitMonitor) capture.limitMonitor.stop();
+        await fsMod.promises.unlink(capture.tempPath).catch(() => {});
+      }
+      capture = null;
+      pendingSourceId = '';
+      sendToWindow('capture-state', captureSnapshot());
+      return captureSnapshot();
     });
 
     ipcMain.handle('choose-workspace', async (event) => {

@@ -14,6 +14,13 @@ contextBridge.exposeInMainWorld('xavaniDesktop', {
   checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
   setAutoUpdate: (enabled) => ipcRenderer.invoke('set-auto-update', enabled),
   exportTimeline: (payload) => ipcRenderer.invoke('timeline-export', payload),
+  listCaptureSources: () => ipcRenderer.invoke('capture-sources'),
+  startCapture: (sourceId) => ipcRenderer.invoke('capture-start', sourceId),
+  writeCaptureChunk: (buffer) => ipcRenderer.invoke('capture-chunk', buffer),
+  stopCapture: () => ipcRenderer.invoke('capture-stop'),
+  saveCapture: () => ipcRenderer.invoke('capture-save'),
+  discardCapture: () => ipcRenderer.invoke('capture-discard'),
+  onCaptureState: (cb) => ipcRenderer.on('capture-state', (_e, info) => cb(info)),
   onUpdateInfo: (cb) => ipcRenderer.on('update-info', (_e, info) => cb(info)),
   quit: () => ipcRenderer.send('app-quit'),
 });

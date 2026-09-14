@@ -211,6 +211,11 @@
         <input id="dock-url" class="mono" placeholder="http://localhost:3000" value="http://localhost:3000">
         <button id="dock-go" class="btn ghost sm">Go</button>
         <button id="dock-edit" class="btn ghost sm" title="Visual edit: click elements, drag spacing, then send changes to the agent">Visual edit</button>
+        <button id="rec-main" class="btn ghost sm" title="Screen capture — explicit start; a source picker opens first, and no capture happens before that">● Capture</button>
+        <button id="rec-stop" class="btn ghost sm hidden">Stop</button>
+        <button id="rec-discard" class="btn ghost sm hidden">Discard</button>
+        <span id="rec-state" class="mono dim"></span>
+        <div id="rec-picker" class="rec-picker hidden"></div>
         <button id="dock-close" class="btn ghost sm" title="Close preview">×</button>
       </div>
       <div id="dock-tabs"></div>
@@ -323,6 +328,8 @@
   <script src="workbench-state.js"></script>
   <script src="business-view.js"></script>
   <script src="timeline.js"></script>
+  <script src="../recording.js"></script>
+  <script src="recording-controls.js"></script>
   <script src="vendor/monaco.bundle.js"></script>
   <script src="editor-adapter.js"></script>
   <script src="app.js"></script>
