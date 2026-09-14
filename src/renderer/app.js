@@ -252,6 +252,7 @@ async function init() {
   loadPrefs();
   setupWorkbench();
   setupDock();
+  initMonacoEditor();
   setupStudio();
   wireComposerClean();
   startActivityPolling();
@@ -1840,7 +1841,12 @@ function setupModelMenus() {
   $('#mf-cancel').addEventListener('click', closeModal);
   $('#modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
   $('#mf-save').addEventListener('click', saveModal);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeModal();
+      if (monacoAdapter) { try { monacoAdapter.closeDiff(); } catch { /* no diff open */ } }
+    }
+  });
 
   const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
   $('#chip-effort').addEventListener('click', () => {
@@ -2854,9 +2860,207 @@ function closeTabsUnder(path) {
   const dead = studio.tabs.filter((t) => t.path.startsWith(prefix));
   if (!dead.length) return;
   studio.tabs = studio.tabs.filter((t) => !dead.includes(t));
+  if (monacoAdapter) {
+    for (const t of dead) { try { monacoAdapter.closeFile(t.path); } catch { /* dirty stays open */ } }
+  }
   if (dead.some((t) => t.path === studio.activePath)) {
     activateTab(studio.tabs.length ? studio.tabs[studio.tabs.length - 1].path : '');
   } else renderTabs();
+}
+
+/* ---------------- monaco editor (R2 Task 15) ----------------
+   Code Pack L's adapter owns the buffers; every write goes through the
+   workspace API's expected-revision route. The legacy textarea editor
+   stays behind localStorage xz-editor = "legacy". */
+
+let monacoAdapter = null;
+
+function monacoWanted() {
+  try { return localStorage.getItem('xz-editor') !== 'legacy'; } catch { return true; }
+}
+
+function saveFileThroughApi(path, content, expectedRevision) {
+  return dapi('/desktop/api/fs/write', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content, expected_revision: expectedRevision }),
+  }).then(async (res) => {
+    const d = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      const err = new Error(d.error || 'The file changed on disk since it was read.');
+      err.conflict = d;
+      throw err;
+    }
+    if (!res.ok || d.error) throw new Error(d.error || `Save failed (${res.status}).`);
+    return d;
+  });
+}
+
+function initMonacoEditor() {
+  if (!monacoWanted() || !window.monaco || !window.XavaniEditor || !$('#monaco-host')) return false;
+  try {
+    self.MonacoEnvironment = { getWorker: () => new Worker('editor-worker.js') };
+    monaco.editor.defineTheme('xavani-dark', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [],
+      colors: { 'editor.background': '#0b0c0e', 'editorGutter.background': '#0b0c0e' },
+    });
+    monaco.editor.setTheme('xavani-dark');
+    monacoAdapter = window.XavaniEditor.createEditorAdapter(window.monaco, $('#monaco-host'), saveFileThroughApi);
+    monacoAdapter.editor.onDidChangeModelContent(() => {
+      const tab = activeTab();
+      if (!tab) return;
+      tab.dirty = monacoAdapter.isDirty();
+      wbDispatch({ type: 'dirty', value: tab.dirty });
+      renderTabs();
+    });
+    $('#app').classList.add('monaco-on');
+    refreshProblems();
+    return true;
+  } catch (err) {
+    console.error('[monaco] init failed:', err);
+    monacoAdapter = null;
+    return false;
+  }
+}
+
+async function refreshProblems() {
+  const list = $('#problems-list');
+  const status = $('#problems-status');
+  if (!list) return;
+  if (!monacoAdapter) {
+    if (status) status.textContent = '';
+    list.innerHTML = '<div class="empty">The Monaco editor is off.</div>';
+    return;
+  }
+  const path = monacoAdapter.activePath();
+  if (!path) {
+    if (status) status.textContent = '';
+    list.innerHTML = '<div class="empty">No file open.</div>';
+    return;
+  }
+  try {
+    const res = await dapi(`/desktop/api/lsp/diagnostics?path=${encodeURIComponent(path)}`);
+    const d = await res.json();
+    if (!d.available) {
+      if (status) status.textContent = 'LSP unavailable';
+      list.innerHTML = '<div class="empty">No language server reports for this file.</div>';
+      return;
+    }
+    const diags = d.diagnostics || [];
+    monacoAdapter.setDiagnostics(path, diags, monacoAdapter.modelVersion(path));
+    renderProblems(path, diags);
+  } catch {
+    if (status) status.textContent = 'LSP unavailable';
+  }
+}
+
+function renderProblems(path, diags) {
+  const list = $('#problems-list');
+  const status = $('#problems-status');
+  if (status) status.textContent = diags.length ? `${diags.length} problem${diags.length === 1 ? '' : 's'}` : 'clean';
+  if (!diags.length) {
+    list.innerHTML = '<div class="empty">No problems in the open file.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const dg of diags) {
+    const line = (((dg.range || {}).start || {}).line || 0) + 1;
+    const col = (((dg.range || {}).start || {}).character || 0) + 1;
+    const btn = document.createElement('button');
+    btn.className = 'problem-item';
+    btn.textContent = `${path}:${line} — ${dg.message || 'problem'}`;
+    btn.title = 'Go to this position';
+    btn.addEventListener('click', () => {
+      try {
+        monacoAdapter.editor.setPosition({ lineNumber: line, column: col });
+        monacoAdapter.editor.focus();
+      } catch { /* the model may have closed underneath */ }
+    });
+    list.appendChild(btn);
+  }
+}
+
+async function saveActiveFileMonaco(force) {
+  const tab = activeTab();
+  if (!tab) return;
+  const expected = (force && force.revision) || tab.revision;
+  if (!expected) { $('#save-state').textContent = 'No revision — reopen the file'; return; }
+  $('#save-state').textContent = 'Saving…';
+  try {
+    let revision;
+    if (force && force.revision) {
+      // The conflict view's overwrite path: write against the disk revision,
+      // then adopt the written content as the new clean base.
+      const model = monacoAdapter.editor.getModel();
+      const content = model ? model.getValue() : tab.content;
+      const result = await saveFileThroughApi(tab.path, content, force.revision);
+      revision = result.revision;
+      monacoAdapter.rebaseFile(tab.path, content, revision);
+    } else {
+      const result = await monacoAdapter.saveActive();
+      revision = result && result.revision;
+    }
+    tab.revision = revision || tab.revision;
+    const model = monacoAdapter.editor.getModel();
+    if (model && monacoAdapter.activePath() === tab.path) { tab.content = model.getValue(); tab.base = tab.content; }
+    tab.dirty = monacoAdapter.isDirty(tab.path);
+    wbDispatch({ type: 'dirty', value: tab.dirty });
+    closeMonacoConflict();
+    $('#save-state').textContent = `Saved ${new Date().toLocaleTimeString()}`;
+    renderTabs();
+    refreshProblems();
+  } catch (err) {
+    tab.dirty = true;
+    wbDispatch({ type: 'dirty', value: true });
+    renderTabs();
+    if (err && err.conflict) {
+      $('#save-state').textContent = 'Conflict — file changed on disk';
+      let disk = err.conflict.disk;
+      if (typeof disk !== 'string') {
+        try {
+          const again = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(tab.path)}`);
+          const fresh = await again.json();
+          if (!fresh.error) { disk = fresh.content; err.conflict.current_revision = fresh.revision; }
+        } catch { /* keep the empty disk pane */ }
+      }
+      showMonacoConflict(tab, typeof disk === 'string' ? disk : '', err.conflict.current_revision);
+    } else {
+      $('#save-state').textContent = `Save failed: ${(err && err.message) || err}`;
+    }
+  }
+}
+
+function showMonacoConflict(tab, disk, diskRevision) {
+  closeMonacoConflict();
+  monacoAdapter.openDiff(tab.path, tab.base == null ? '' : tab.base, disk);
+  const box = document.createElement('div');
+  box.id = 'conflict-view';
+  box.className = 'conflict-view mono';
+  box.style.cssText = 'position:absolute;left:0;right:0;top:0;z-index:5;display:flex;gap:8px;align-items:center;padding:8px 12px;background:#1a130d;border-bottom:1px solid #f0b429';
+  box.innerHTML = `<span style="color:#f0b429">⚠ ${escapeHtml(tab.name)} changed on disk — your buffer was not saved.</span>
+    <span class="flex-spacer"></span>
+    <button id="cf-keep" class="btn sm">Overwrite disk</button>
+    <button id="cf-reload" class="btn ghost sm">Reload from disk</button>
+    <button id="cf-dismiss" class="btn ghost sm">Keep editing</button>`;
+  box.querySelector('#cf-keep').addEventListener('click', () => { closeMonacoConflict(); saveActiveFile({ revision: diskRevision }); });
+  box.querySelector('#cf-reload').addEventListener('click', () => {
+    closeMonacoConflict();
+    monacoAdapter.rebaseFile(tab.path, disk, diskRevision || '');
+    tab.content = disk; tab.base = disk; tab.revision = diskRevision || ''; tab.dirty = false;
+    wbDispatch({ type: 'dirty', value: false });
+    activateTab(tab.path);
+    $('#save-state').textContent = 'Reloaded from disk';
+    renderTabs();
+  });
+  box.querySelector('#cf-dismiss').addEventListener('click', closeMonacoConflict);
+  $('#editor-wrap').appendChild(box);
+}
+
+function closeMonacoConflict() {
+  if (monacoAdapter) { try { monacoAdapter.closeDiff(); } catch { /* diff may be closed */ } }
+  clearConflict();
 }
 
 /* ----- editor tabs ----- */
@@ -2879,6 +3083,14 @@ function activateTab(path) {
   studio.activePath = path || null;
   const tab = activeTab();
   wbDispatch({ type: 'dirty', value: Boolean(tab && tab.dirty) });
+  if (monacoAdapter) {
+    try { monacoAdapter.closeDiff(); } catch { /* no diff open */ }
+    if (tab) monacoAdapter.openFile({ path: tab.path, content: tab.content, revision: tab.revision });
+    $('#editor-empty').style.display = tab ? 'none' : '';
+    renderTabs();
+    refreshProblems();
+    return;
+  }
   $('#editor-empty').style.display = tab ? 'none' : '';
   $('#editor').style.display = tab ? '' : 'none';
   $('#editor-gutter').style.display = tab ? '' : 'none';
@@ -2902,6 +3114,10 @@ function renderTabs() {
       activateTab(t.path);
     });
     el.querySelector('.tab-close').addEventListener('click', () => {
+      if (monacoAdapter) {
+        try { monacoAdapter.closeFile(t.path); }
+        catch (err) { $('#save-state').textContent = (err && err.message) || String(err); return; }
+      }
       studio.tabs = studio.tabs.filter((x) => x !== t);
       if (studio.activePath === t.path) activateTab(studio.tabs.length ? studio.tabs[studio.tabs.length - 1].path : '');
       else renderTabs();
@@ -2920,6 +3136,7 @@ function syncGutter() {
 }
 
 async function saveActiveFile(force) {
+  if (monacoAdapter) { await saveActiveFileMonaco(force); return; }
   const tab = activeTab();
   if (!tab) return;
   tab.content = $('#editor').value;

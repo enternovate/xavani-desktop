@@ -202,3 +202,26 @@ body.wb-resizing { user-select: none; }
 .wb-flip-fade { animation: wb-flip-fade var(--workbench-motion) ease; }
 @keyframes wb-flip-fade { from { opacity: 0; } to { opacity: 1; } }
 #dock-flip.is-disabled { opacity: 0.55; }
+
+/* ---------- monaco editor + problems (task 15) ---------- */
+
+#monaco-host { display: none; position: absolute; inset: 0; }
+#app.monaco-on #monaco-host { display: block; }
+#app.monaco-on #editor,
+#app.monaco-on #editor-gutter,
+#app.monaco-on #editor-hl { display: none !important; }
+
+.wb-problems { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.wb-problems-head {
+  display: flex; gap: var(--workbench-space-2); align-items: center;
+  padding: 4px 12px; font-size: 11px; color: var(--workbench-muted);
+  border-bottom: 1px solid var(--workbench-border);
+}
+.wb-problems-list { flex: 1; overflow: auto; padding: 4px 6px; }
+.problem-item {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: var(--workbench-text); font: inherit; font-size: 11px;
+  padding: 3px 8px; border-radius: var(--workbench-radius); cursor: pointer;
+}
+.problem-item:hover,
+.problem-item:focus-visible { background: rgba(105, 173, 255, 0.16); outline: none; }

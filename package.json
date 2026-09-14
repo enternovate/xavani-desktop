@@ -2,20 +2,23 @@
   "name": "xavani-desktop",
   "productName": "Xavani",
   "version": "0.3.0",
-  "description": "Xavani Agent desktop app \u2014 the full CLI engine in a native GUI",
+  "description": "Xavani Agent desktop app — the full CLI engine in a native GUI",
   "main": "src/main.js",
   "author": "Enternovate",
   "license": "MIT",
   "repository": "github:enternovate/xavani-desktop",
   "scripts": {
     "start": "electron .",
-    "dist:mac": "bash scripts/build-macos.sh"
+    "dist:mac": "bash scripts/build-macos.sh",
+    "build:monaco": "esbuild node_modules/monaco-editor/esm/vs/editor/editor.main.js --bundle --minify --format=iife --global-name=monaco --outdir=src/renderer/vendor --entry-names=monaco.bundle --loader:.ttf=file --banner:js=\"/* Generated from monaco-editor 0.56.0 (MIT) - npm run build:monaco */\" && esbuild node_modules/monaco-editor/esm/vs/editor/editor.worker.js --bundle --minify --format=iife --outfile=src/renderer/editor-worker.js --banner:js=\"/* Generated from monaco-editor 0.56.0 (MIT) - npm run build:monaco */\""
   },
   "devDependencies": {
-    "electron": "^38.2.0"
+    "electron": "^38.2.0",
+    "esbuild": "0.28.2"
   },
   "dependencies": {
+    "dompurify": "^3.2.0",
     "marked": "^15.0.0",
-    "dompurify": "^3.2.0"
+    "monaco-editor": "0.56.0"
   }
 }

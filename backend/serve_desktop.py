@@ -1444,6 +1444,50 @@ def build_desktop_app(api_port: int, secret: str):
             "bytes": result["bytes"],
         })
 
+    # ---------------- language server bridge (task 15) ----------------
+    # The UI consults the existing agent/lsp service through these narrow
+    # routes.  Diagnostics are fetched with delta=False so a renderer poll
+    # never perturbs the agent's write-delta baseline.
+
+    def _lsp_service():
+        try:
+            from agent.lsp import get_service
+
+            return get_service()
+        except Exception:
+            return None
+
+    @routes.get("/desktop/api/lsp/status")
+    async def lsp_status(_request: "web.Request") -> "web.Response":
+        try:
+            service = _lsp_service()
+            return web.json_response({"available": bool(service is not None and service.is_active())})
+        except Exception as exc:
+            return web.json_response({"available": False, "error": str(exc)})
+
+    @routes.get("/desktop/api/lsp/diagnostics")
+    async def lsp_diagnostics(request: "web.Request") -> "web.Response":
+        raw = request.query.get("path", "")
+        try:
+            target = str(boundary.resolve(raw))
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        try:
+            service = _lsp_service()
+            if service is None or not service.is_active():
+                return web.json_response({"available": False, "diagnostics": []})
+            if not service.enabled_for(target):
+                return web.json_response(
+                    {"available": False, "diagnostics": [], "reason": "no server for this file"})
+            loop = asyncio.get_running_loop()
+            diags = await loop.run_in_executor(
+                None, lambda: service.get_diagnostics_sync(target, delta=False))
+            return web.json_response({"available": True, "diagnostics": diags or []})
+        except Exception as exc:
+            return web.json_response({"available": False, "diagnostics": [], "error": str(exc)})
+
     # ---------------- voice transcription ----------------
 
     def _read_env_key(name: str) -> str:

@@ -3,11 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*">
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; worker-src 'self' blob:">
   <title>Xavani</title>
   <link rel="stylesheet" href="vendor/xterm.css">
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="workbench.css">
+  <link rel="stylesheet" href="vendor/monaco.bundle.css">
 </head>
 <body>
   <div id="boot">
@@ -189,6 +190,7 @@
           <pre id="editor-hl" class="mono" aria-hidden="true"></pre>
           <textarea id="editor" class="mono" spellcheck="false" autocomplete="off" wrap="off"></textarea>
           <div id="editor-empty" class="empty">No file open.<br><br>Pick one from the Explorer on the left, or start a dev server and load it in the Preview on the right.</div>
+          <div id="monaco-host"></div>
         </div>
         <div id="studio-help" class="mono">/studio toggles this layout · ⌘S saves · Visual edit (right dock) moves, deletes, recolours &amp; animates elements</div>
       </section>
@@ -236,7 +238,10 @@
 
     <div id="wb-region-bottom" class="wb-region" data-region="bottom" aria-label="Bottom pane">
       <div id="wb-resize-bottom" class="wb-resize wb-resize-h" role="separator" aria-orientation="horizontal" aria-label="Resize bottom pane" title="Drag to resize — arrow keys adjust" tabindex="0"></div>
-      <div id="wb-bottom-note" class="wb-bottom-note">Terminal, problems, and activity panels land in this region once they are wired.</div>
+      <div id="wb-problems" class="wb-problems" aria-label="Problems">
+        <div class="wb-problems-head">Problems <span id="problems-status" class="mono"></span></div>
+        <div id="problems-list" class="wb-problems-list"><div class="empty">No problems.</div></div>
+      </div>
     </div>
 
     <div id="wb-region-status" class="wb-region" data-region="status" aria-label="Workbench status">
@@ -291,6 +296,8 @@
   <script src="vendor/xterm-addon-fit.js"></script>
   <script src="run-state.js"></script>
   <script src="workbench-state.js"></script>
+  <script src="vendor/monaco.bundle.js"></script>
+  <script src="editor-adapter.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
