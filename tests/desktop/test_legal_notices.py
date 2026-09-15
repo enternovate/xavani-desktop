@@ -55,6 +55,7 @@ VENDORED_NOTICE_LINES = [
     ("purify.min.js", "Apache license 2.0"),
     ("purify.min.js", "Mozilla Public License 2.0"),
     ("xterm.css", "/npm/xterm@5.3.0/css/xterm.css"),
+    ("monaco.bundle.js", "Generated from monaco-editor 0.56.0 (MIT)"),
 ]
 
 # Files the notices declare as shipping in the app payload.
@@ -64,6 +65,9 @@ VENDORED_FILES = [
     "xterm.js",
     "xterm-addon-fit.js",
     "xterm.css",
+    "monaco.bundle.js",
+    "monaco.bundle.css",
+    "codicon-KP4OV2OO.ttf",
 ]
 
 # Attribution the notices file must retain.
@@ -89,6 +93,8 @@ REQUIRED_ATTRIBUTION = [
     "Chromium",
     "Node.js",
     "LICENSES.chromium.html",
+    "monaco-editor",
+    "Microsoft Corporation",
 ]
 
 BROWSER_EXTENSION_ATTRIBUTION = [

@@ -30,6 +30,9 @@ exactly as it appears in the vendored file.
 | **xterm.js** — terminal renderer | `src/renderer/vendor/xterm.js` | 5.3.0 (see note) | no notice embedded in the bundle |
 | **xterm addon-fit** — terminal fit addon | `src/renderer/vendor/xterm-addon-fit.js` | not embedded | no notice embedded in the bundle |
 | **xterm.css** — terminal stylesheet | `src/renderer/vendor/xterm.css` | 5.3.0 (jsDelivr build) | no notice embedded; jsDelivr provenance header only |
+| **monaco-editor** — code editor bundle | `src/renderer/vendor/monaco.bundle.js` | 0.56.0 (esbuild 0.28.2) | `Generated from monaco-editor 0.56.0 (MIT) - npm run build:monaco` |
+| **monaco-editor** — editor stylesheet | `src/renderer/vendor/monaco.bundle.css` | 0.56.0 (esbuild 0.28.2) | no notice embedded (generated stylesheet) |
+| **codicon** — icon font (part of monaco-editor) | `src/renderer/vendor/codicon-KP4OV2OO.ttf` | 0.56.0 (hashed font-subset name) | binary font; no text notice |
 
 ### 1.1 marked (MIT)
 
@@ -89,6 +92,52 @@ Copyright (c) 2012-2013, Christopher Jeffrey (https://github.com/chjj/)
 
 The same MIT license text governs the addon-fit bundle. This is an
 attribution obligation; it stays here.
+
+### 1.4 Monaco Editor (MIT)
+
+The editor surface (task 15) ships two bundles generated from the
+`monaco-editor` npm package (0.56.0) plus its icon-font subset. The
+JavaScript bundle carries this verbatim banner:
+
+```
+/* Generated from monaco-editor 0.56.0 (MIT) - npm run build:monaco */
+```
+
+The generated stylesheet and the font subset carry no notice text, so the
+attribution is recorded here. The bundles are produced by
+`npm run build:monaco` with **esbuild 0.28.2** (MIT) as the bundling tool;
+esbuild itself is a build-time tool and its binary is not redistributed.
+
+Upstream project: <https://github.com/microsoft/monaco-editor> — **MIT**.
+
+The upstream license file carries this copyright line, reproduced
+verbatim:
+
+```
+Copyright (c) 2016 - present Microsoft Corporation
+```
+
+MIT License text (monaco-editor):
+
+```
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
 
 ## 2. Runtime dependencies that ship inside the package
 
