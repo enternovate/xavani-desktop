@@ -23,6 +23,7 @@ import socket
 import sys
 import time
 import tomllib
+import warnings
 from pathlib import Path
 
 STARTED_AT = time.time()
@@ -176,10 +177,62 @@ def _installed_skills() -> list[dict]:
     return out
 
 
-def build_desktop_app(api_port: int):
+def build_desktop_app(api_port: int, secret: str):
     from aiohttp import web
 
+    try:
+        from backend.desktop_auth import desktop_auth
+    except ImportError:
+        # Launched as a script (Electron passes an absolute path): backend/
+        # itself is sys.path[0], so the package form does not resolve.
+        from desktop_auth import desktop_auth
+
     routes = web.RouteTableDef()
+
+    try:
+        from backend.workspace_paths import (
+            NATIVE_GRANT_HEADER,
+            NATIVE_GRANT_SOURCE,
+            WORKSPACE_ERRORS,
+            WORKSPACE_REQUIRED,
+            WorkspaceBoundary,
+            native_grant,
+        )
+    except ImportError:
+        # Launched as a script (Electron passes an absolute path): backend/
+        # itself is sys.path[0], so the package form does not resolve.
+        from workspace_paths import (  # type: ignore[no-redef]
+            NATIVE_GRANT_HEADER,
+            NATIVE_GRANT_SOURCE,
+            WORKSPACE_ERRORS,
+            WORKSPACE_REQUIRED,
+            WorkspaceBoundary,
+            native_grant,
+        )
+
+    try:
+        from backend.workspace_files import (
+            MAX_TEXT_BYTES,
+            FileTooLarge,
+            RevisionConflict,
+            RevisionRequired,
+            read_workspace_file,
+            save_workspace_file,
+        )
+    except ImportError:
+        from workspace_files import (  # type: ignore[no-redef]
+            MAX_TEXT_BYTES,
+            FileTooLarge,
+            RevisionConflict,
+            RevisionRequired,
+            read_workspace_file,
+            save_workspace_file,
+        )
+
+    # One boundary per desktop app: the single selected workspace root.  It
+    # starts empty — only a native grant (POST /desktop/api/fs/root with the
+    # X-Xavani-Native header) may set it.
+    boundary = WorkspaceBoundary()
 
     CLI_COMMANDS = [
         {"name": "doctor", "args": ["doctor"], "desc": "Check dependencies, config and health"},
@@ -818,7 +871,7 @@ def build_desktop_app(api_port: int):
     MIG_LABELS = {
         "claude_code": "Claude Code",
         "codex": "Codex",
-        "hermes": "Hermes",
+        "hermes": "Legacy Agent",
         "cursor": "Cursor",
         "gemini": "Gemini CLI",
         "opencode": "OpenCode",
@@ -860,10 +913,10 @@ def build_desktop_app(api_port: int):
         ops = body.get("ops")
         if not isinstance(ops, list) or not ops:
             return web.json_response({"error": "ops list required"}, status=400)
-        root_value = _ws_state_path_root()
-        if not root_value:
-            root_value = str(Path.home())
-        root = Path(str(root_value)).expanduser()
+        try:
+            root = boundary.require_root()
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         brief_lines: list[str] = []
         unresolved: list[dict] = []
         searched = 0
@@ -1203,60 +1256,84 @@ def build_desktop_app(api_port: int):
 
     # ---------------- studio IDE: filesystem endpoints ----------------
     #
-    # All paths are resolved and MUST stay inside the user's home directory.
-    # The server binds to 127.0.0.1 only; this guard is defence-in-depth so a
-    # stray page can't probe arbitrary absolute paths through the desktop API.
-    _HOME = Path.home().resolve()
+    # Every path is resolved through the workspace boundary
+    # (backend/workspace_paths.py).  A path is accepted only when it realpaths
+    # inside the single selected workspace root, so a home-prefix check no
+    # longer decides access.  Control directories (.git, .ssh, .aws, .gnupg,
+    # .xavani, .hermes, .config/xavani) refuse writes; credential-looking files
+    # refuse reads and writes.
+    #
+    # The root itself comes from a native grant only: POST /desktop/api/fs/root
+    # requires the shared secret in the X-Xavani-Native header, which the
+    # renderer's webRequest injector never adds (it adds Authorization).  A
+    # renderer-originated request therefore cannot create a grant, and a raw
+    # HTTP caller without the secret is rejected by the auth middleware (401)
+    # or by the grant check (403).
+    #
+    # Status conventions:
+    #   428  no workspace granted yet — {"error": "Workspace required"}
+    #   400  malformed path, or a parent-traversal ("..") attempt
+    #   403  outside the root, control dir write, credential file, symlink,
+    #        or a non-native grant attempt
     _TREE_SKIP = {"node_modules", ".git", "__pycache__", ".venv", "venv",
                   "dist-electron", ".cache", ".DS_Store"}
 
     def _ws_state_path() -> Path:
         return _xavani_home() / "desktop-workspace.json"
 
-    def _safe_path(raw: str) -> Path:
-        p = Path(str(raw)).expanduser()
-        if not p.is_absolute():
-            p = _ws_state_path_root() / p
-        rp = p.resolve()
-        if not str(rp).startswith(str(_HOME)):
-            raise ValueError(f"path outside home directory: {rp}")
-        return rp
-
-    def _ws_state_path_root() -> Path:
-        try:
-            data = json.loads(_ws_state_path().read_text(encoding="utf-8"))
-            root = _safe_path(data.get("root", ""))
-            if root.is_dir():
-                return root
-        except Exception:
-            pass
-        fallback = _HOME / "Desktop" / "enternovate-builds"
-        return fallback if fallback.is_dir() else _HOME
+    def _fs_error(exc: Exception) -> "web.Response":
+        return web.json_response({"error": str(exc)}, status=getattr(exc, "status", 403))
 
     @routes.get("/desktop/api/fs/root")
     async def fs_root_get(_request: "web.Request") -> "web.Response":
-        return web.json_response({"root": str(_ws_state_path_root())})
+        snapshot = boundary.snapshot()
+        if not snapshot["granted"]:
+            return web.json_response(
+                {"error": WORKSPACE_REQUIRED, "root": "", "granted": False}, status=428)
+        return web.json_response(snapshot)
 
     @routes.post("/desktop/api/fs/root")
     async def fs_root_set(request: "web.Request") -> "web.Response":
         try:
             body = await request.json()
-            root = _safe_path(body.get("root", ""))
-            if not root.is_dir():
-                return web.json_response({"error": f"not a directory: {root}"}, status=400)
-            _ws_state_path().parent.mkdir(parents=True, exist_ok=True)
-            _ws_state_path().write_text(json.dumps({"root": str(root)}), encoding="utf-8")
-            return web.json_response({"ok": True, "root": str(root)})
-        except ValueError as exc:
-            return web.json_response({"error": str(exc)}, status=400)
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        # A grant entry point: the secret must arrive in X-Xavani-Native.  The
+        # renderer's webRequest injector adds Authorization only, and the
+        # renderer never holds the raw secret, so an XHR from the page cannot
+        # reach this branch.
+        try:
+            root = native_grant(
+                boundary,
+                body.get("root", ""),
+                header_value=request.headers.get(NATIVE_GRANT_HEADER),
+                secret=secret,
+            )
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
+        # Persist the record for the shell's next launch.  This file is a
+        # hint, not a grant: the boundary still starts empty every run.
+        try:
+            _ws_state_path().parent.mkdir(parents=True, exist_ok=True)
+            _ws_state_path().write_text(
+                json.dumps({"root": str(root), "granted_by": NATIVE_GRANT_SOURCE}),
+                encoding="utf-8")
+        except Exception:
+            pass
+        return web.json_response({
+            "ok": True,
+            "root": str(root),
+            "granted": True,
+            "generation": boundary.generation,
+        })
 
     @routes.get("/desktop/api/fs/tree")
     async def fs_tree(request: "web.Request") -> "web.Response":
-        raw = request.query.get("path") or str(_ws_state_path_root())
+        raw = request.query.get("path") or "."
         try:
-            base = _safe_path(raw)
+            base = boundary.resolve(raw, allow_root=True)
             if not base.exists():
                 return web.json_response({"error": f"not found: {base}"}, status=404)
             entries = []
@@ -1276,44 +1353,298 @@ def build_desktop_app(api_port: int):
             except PermissionError:
                 pass
             return web.json_response({"path": str(base), "entries": entries})
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
-    _MAX_FILE_BYTES = 2 * 1024 * 1024
+    # Upper bound on the request body for a text save, checked before the body
+    # is read: an oversized write is refused before allocation can grow without
+    # bound.  aiohttp's own client_max_size is the second backstop.
+    _MAX_WRITE_REQUEST_BYTES = MAX_TEXT_BYTES + 64 * 1024
 
     @routes.get("/desktop/api/fs/file")
     async def fs_file(request: "web.Request") -> "web.Response":
+        raw = request.query.get("path", "")
         try:
-            path = _safe_path(request.query.get("path", ""))
-            if not path.is_file():
-                return web.json_response({"error": f"not a file: {path}"}, status=404)
-            size = path.stat().st_size
-            if size > _MAX_FILE_BYTES:
-                return web.json_response({"error": f"file too large ({size} bytes)"}, status=413)
-            blob = path.read_bytes()
-            try:
-                text = blob.decode("utf-8")
-            except UnicodeDecodeError:
-                return web.json_response({"error": "binary file — not editable here"}, status=415)
-            return web.json_response({"path": str(path), "content": text, "size": size})
+            # The boundary authorises the path; the read then reports the exact
+            # bytes on disk and their SHA-256 revision, which a save must echo.
+            result = read_workspace_file(boundary.require_root(), raw)
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        except FileNotFoundError:
+            return web.json_response({"error": f"not a file: {raw}"}, status=404)
+        except FileTooLarge as exc:
+            return web.json_response({"error": str(exc)}, status=413)
+        except UnicodeDecodeError:
+            return web.json_response({"error": "binary file — not editable here"}, status=415)
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
+        return web.json_response(result)
 
     @routes.post("/desktop/api/fs/write")
     async def fs_write(request: "web.Request") -> "web.Response":
+        declared = request.content_length
+        if declared is not None and declared > _MAX_WRITE_REQUEST_BYTES:
+            return web.json_response({"error": "content too large"}, status=413)
         try:
             body = await request.json()
-            path = _safe_path(body.get("path", ""))
-            content = str(body.get("content", ""))
-            if len(content.encode("utf-8")) > _MAX_FILE_BYTES:
+        except Exception as exc:
+            if "EntityTooLarge" in type(exc).__name__:
                 return web.json_response({"error": "content too large"}, status=413)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8")
-            return web.json_response({"ok": True, "path": str(path), "bytes": len(content.encode("utf-8"))})
+            return web.json_response({"error": "invalid body"}, status=400)
+        raw = body.get("path", "")
+        root = None
+        try:
+            # Authorise first so a traversal or a protected path keeps its own
+            # 400/403 even when the expected revision is missing too.
+            boundary.resolve(raw, write=True)
+            root = boundary.require_root()
+            expected = body.get("expected_revision")
+            if not isinstance(expected, str) or not expected:
+                # A save always carries the revision its buffer read.  A missing
+                # revision is never permission to overwrite.
+                return web.json_response({"error": "An expected revision is required."}, status=428)
+            content = body.get("content", "")
+            if not isinstance(content, str):
+                return web.json_response({"error": "content must be a string"}, status=400)
+            result = save_workspace_file(root, raw, content, expected)
+        except RevisionConflict:
+            # The buffer is behind the disk: change nothing and hand the caller
+            # both sides so a conflict review can show disk, buffer and base.
+            disk: dict = {}
+            try:
+                disk = read_workspace_file(boundary.require_root(), raw)
+            except Exception:
+                disk = {}
+            return web.json_response({
+                "error": "The file changed on disk since it was read.",
+                "conflict": True,
+                "current_revision": disk.get("revision"),
+                "disk": disk.get("content"),
+            }, status=409)
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        except FileNotFoundError:
+            return web.json_response({"error": f"not a file: {raw}"}, status=404)
+        except FileTooLarge as exc:
+            return web.json_response({"error": str(exc)}, status=413)
+        except RevisionRequired as exc:
+            return web.json_response({"error": str(exc)}, status=428)
+        except PermissionError as exc:
+            return web.json_response({"error": str(exc)}, status=403)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
+        return web.json_response({
+            "ok": True, "path": result["path"], "revision": result["revision"],
+            "bytes": result["bytes"],
+        })
+
+    # ---------------- language server bridge (task 15) ----------------
+    # The UI consults the existing agent/lsp service through these narrow
+    # routes.  Diagnostics are fetched with delta=False so a renderer poll
+    # never perturbs the agent's write-delta baseline.
+
+    def _lsp_service():
+        try:
+            from agent.lsp import get_service
+
+            return get_service()
+        except Exception:
+            return None
+
+    @routes.get("/desktop/api/lsp/status")
+    async def lsp_status(_request: "web.Request") -> "web.Response":
+        try:
+            service = _lsp_service()
+            return web.json_response({"available": bool(service is not None and service.is_active())})
+        except Exception as exc:
+            return web.json_response({"available": False, "error": str(exc)})
+
+    @routes.get("/desktop/api/lsp/diagnostics")
+    async def lsp_diagnostics(request: "web.Request") -> "web.Response":
+        raw = request.query.get("path", "")
+        try:
+            target = str(boundary.resolve(raw))
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+        try:
+            service = _lsp_service()
+            if service is None or not service.is_active():
+                return web.json_response({"available": False, "diagnostics": []})
+            if not service.enabled_for(target):
+                return web.json_response(
+                    {"available": False, "diagnostics": [], "reason": "no server for this file"})
+            loop = asyncio.get_running_loop()
+            diags = await loop.run_in_executor(
+                None, lambda: service.get_diagnostics_sync(target, delta=False))
+            return web.json_response({"available": True, "diagnostics": diags or []})
+        except Exception as exc:
+            return web.json_response({"available": False, "diagnostics": [], "error": str(exc)})
+
+    # ---------------- business workspace view (task 21) ----------------
+    # The view renders exactly what these routes can serve: workflow
+    # capability is decided here, approvals come from the real operator
+    # queue (task 19), and no control can claim more than that.
+
+    _BUSINESS_WORKFLOWS = [
+        {"id": "B01", "name": "Finance analysis", "needs": ["period", "currency"], "catalog": "finance"},
+        {"id": "B02", "name": "Invoice review", "needs": ["currency"], "catalog": "invoices"},
+        {"id": "B03", "name": "Daily operations", "needs": [], "catalog": "daily"},
+        {"id": "B04", "name": "Inbox and support", "needs": [], "catalog": "inbox"},
+        {"id": "B05", "name": "Meetings", "needs": [], "catalog": "meetings"},
+        {"id": "B06", "name": "Sales and marketing", "needs": [], "catalog": "sales"},
+        {"id": "B07", "name": "People and administration", "needs": [], "catalog": "people"},
+        {"id": "B08", "name": "Procurement and inventory", "needs": [], "catalog": "procurement"},
+        {"id": "B09", "name": "Legal and compliance support", "needs": [], "catalog": "compliance"},
+        {"id": "B10", "name": "Engineering and design", "needs": [], "catalog": "engineering"},
+        {"id": "B11", "name": "Executive reporting", "needs": ["period", "currency"], "catalog": "executive"},
+        {"id": "B12", "name": "Safety and incidents", "needs": [], "catalog": "incidents"},
+    ]
+
+    @routes.get("/desktop/api/business/state")
+    async def business_state(_request: "web.Request") -> "web.Response":
+        try:
+            root = boundary.require_root()
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        payload = {
+            "workflows": _BUSINESS_WORKFLOWS,
+            "sources": None, "drafts": None,
+            "checks": [], "approvals": [], "outstanding": [],
+        }
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+
+            file_state = {}
+            state_path = _Path(root) / ".xavani-business" / "state.json"
+            if state_path.is_file():
+                file_state = _json.loads(state_path.read_text(encoding="utf-8")) or {}
+            for key in ("sources", "drafts", "checks", "outstanding"):
+                if isinstance(file_state.get(key), list):
+                    payload[key] = file_state[key]
+            if payload["sources"] is None:
+                entries = []
+                for name in sorted(os.listdir(root)):
+                    if name.startswith("."):
+                        continue
+                    full = os.path.join(root, name)
+                    entries.append({
+                        "name": name,
+                        "access": "Granted" if os.access(full, os.R_OK) else "Unavailable",
+                    })
+                payload["sources"] = entries
+            if payload["drafts"] is None:
+                drafts_dir = _Path(root) / "drafts"
+                payload["drafts"] = (
+                    [] if not drafts_dir.is_dir()
+                    else [{"name": p.name, "path": str(p)} for p in sorted(drafts_dir.iterdir()) if p.is_file()]
+                )
+            # Approvals: the real operator queue (task 19) when importable.
+            try:
+                from xavani_operator.approval_queue import ApprovalQueue
+                from xavani_operator.state import OperatorState
+
+                queue = ApprovalQueue(OperatorState())
+                records = []
+                for approval in queue.list_actions():
+                    req = approval.request or {}
+                    records.append({
+                        "id": approval.id,
+                        "operation": req.get("operation"),
+                        "target": req.get("target"),
+                        "recipient": (req.get("payload") or {}).get("recipient"),
+                        "state": approval.state,
+                        "consumed": approval.consumed,
+                    })
+                if records or not file_state.get("approvals"):
+                    payload["approvals"] = records
+            except Exception:
+                payload["approvals"] = file_state.get("approvals") or []
+            return web.json_response(payload)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)})
+
+    @routes.post("/desktop/api/business/decide")
+    async def business_decide(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        approval_id = str(body.get("id") or "")
+        decision = str(body.get("decision") or "")
+        if not approval_id or decision not in ("approve", "deny"):
+            return web.json_response({"error": "id and decision are required"}, status=400)
+        try:
+            import time as _time
+
+            from xavani_operator.approval_queue import ApprovalQueue
+            from xavani_operator.state import OperatorState
+
+            queue = ApprovalQueue(OperatorState())
+            if decision == "approve":
+                record = queue.get_action(approval_id)
+                if record is None:
+                    return web.json_response({"error": "unknown approval"}, status=404)
+                if record.state == "draft":
+                    queue.request_approval(approval_id)
+                result = queue.approve_action(approval_id, now=_time.time())
+            else:
+                result = queue.deny_action(approval_id, now=_time.time())
+            if result is None:
+                return web.json_response({"error": "unknown approval"}, status=404)
+            return web.json_response({"ok": True, "state": result.state})
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=409)
+        except Exception as exc:
+            return web.json_response({"error": str(exc)})
+
+    @routes.post("/desktop/api/business/select")
+    async def business_select(request: "web.Request") -> "web.Response":
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"error": "invalid body"}, status=400)
+        workflow_id = str(body.get("workflow_id") or "").upper()
+        period = str(body.get("period") or "").strip()
+        currency = str(body.get("currency") or "").strip()
+        spec = next((w for w in _BUSINESS_WORKFLOWS if w["id"] == workflow_id), None)
+        if spec is None:
+            return web.json_response({"error": f"unknown workflow {workflow_id!r}"}, status=404)
+        values = {"period": period, "currency": currency}
+        missing = [need for need in spec["needs"] if not values.get(need)]
+        if missing:
+            return web.json_response({"error": f"Blocked: missing {' and '.join(missing)}."})
+        try:
+            from agent.skill_commands import build_workflow_skill_message
+
+            message = build_workflow_skill_message(spec["catalog"], mode="ask")
+        except Exception as exc:
+            return web.json_response({"error": f"workflow load failed: {exc}"})
+        if not message:
+            return web.json_response({"error": "the workflow has nothing to load"})
+        return web.json_response({"ok": True, "workflow_id": spec["id"], "message": message})
+
+    # ---------------- work timeline (task 22) ----------------
+
+    @routes.get("/desktop/api/timeline")
+    async def timeline_state(_request: "web.Request") -> "web.Response":
+        try:
+            from agent.work_timeline import latest_timeline_file, read_timeline
+
+            path = latest_timeline_file()
+            if path is None:
+                return web.json_response({"session": "", "events": []})
+            return web.json_response({"session": path.stem, "events": read_timeline(path)})
+        except Exception as exc:
+            return web.json_response({"error": str(exc)})
 
     # ---------------- voice transcription ----------------
 
@@ -1383,20 +1714,22 @@ def build_desktop_app(api_port: int):
         name = request.query.get("name", "").strip()
         if not name or "/" in name or "\\" in name or ".." in name:
             return web.json_response({"error": "bad name"}, status=400)
-        root = _ws_state_path_root()
-        matches = sorted(p for p in root.rglob(name) if p.is_file())
+        try:
+            root = boundary.require_root()
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        # The boundary filters the walk: symlinks and credential files never
+        # appear in a result, even when the name matches.
+        matches = sorted(p for p in root.rglob(name) if p.is_file() and boundary.permits(p))
         return web.json_response({"path": str(matches[0]) if matches else None, "count": len(matches)})
 
     @routes.post("/desktop/api/fs/write-b64")
     async def fs_write_b64(request: "web.Request") -> "web.Response":
         try:
             body = await request.json()
-            path = _safe_path(body.get("path", ""))
             import base64 as _b64
 
             raw = _b64.b64decode(str(body.get("data_b64", "")))
-        except ValueError as exc:
-            return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": f"bad payload: {exc}"}, status=400)
         if not raw:
@@ -1404,12 +1737,17 @@ def build_desktop_app(api_port: int):
         if len(raw) > 20 * 1024 * 1024:
             return web.json_response({"error": "over 20MB"}, status=413)
         try:
+            path = boundary.resolve(body.get("path", ""), write=True)
             path.parent.mkdir(parents=True, exist_ok=True)
             if path.exists():
                 backup = path.with_suffix(path.suffix + ".bak")
                 backup.write_bytes(path.read_bytes())
             path.write_bytes(raw)
             return web.json_response({"ok": True, "path": str(path), "bytes": len(raw)})
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
+        except ValueError as exc:
+            return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
 
@@ -1418,7 +1756,7 @@ def build_desktop_app(api_port: int):
         try:
             body = await request.json()
             op = str(body.get("op", ""))
-            path = _safe_path(body.get("path", ""))
+            path = boundary.resolve(body.get("path", ""), write=True)
             if op == "mkdir":
                 path.mkdir(parents=True, exist_ok=True)
             elif op == "newfile":
@@ -1429,24 +1767,62 @@ def build_desktop_app(api_port: int):
                 else:
                     path.unlink(missing_ok=True)
             elif op == "rename":
-                dest = _safe_path(body.get("to", ""))
+                dest = boundary.resolve(body.get("to", ""), write=True)
                 path.rename(dest)
             else:
                 return web.json_response({"error": f"unknown op: {op}"}, status=400)
             return web.json_response({"ok": True, "op": op, "path": str(path)})
         except FileExistsError:
             return web.json_response({"error": "already exists"}, status=409)
+        except WORKSPACE_ERRORS as exc:
+            return _fs_error(exc)
         except ValueError as exc:
             return web.json_response({"error": str(exc)}, status=400)
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=500)
 
-    app = web.Application()
+    app = web.Application(middlewares=[desktop_auth(secret)])
     app.add_routes(routes)
+    # Expose the boundary so the shell and the tests can inspect or prime the
+    # selected workspace without going through the HTTP grant route.  A plain
+    # string key stays stable across aiohttp releases; the AppKey hint is not
+    # worth changing the accessor.
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*AppKey instances for keys.*")
+        app["workspace"] = boundary
     return app
 
 
+_BOOTSTRAP_SECRET_RE = re.compile(r"[0-9a-f]{64}")
+
+
+def _read_bootstrap_secret(stream) -> str:
+    """Read the single-line JSON bootstrap secret from ``stream``."""
+    line = stream.readline()
+    if not line:
+        raise ValueError("empty bootstrap stream")
+    try:
+        payload = json.loads(line)
+    except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
+        raise ValueError("bootstrap line is not JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("bootstrap payload must be a JSON object")
+    secret = payload.get("secret")
+    if not isinstance(secret, str) or not _BOOTSTRAP_SECRET_RE.fullmatch(secret):
+        raise ValueError("bootstrap secret must be 64 lowercase hex characters")
+    return secret
+
+
 async def main() -> None:
+    try:
+        secret = _read_bootstrap_secret(sys.stdin)
+    except ValueError:
+        print(json.dumps({
+            "ready": False,
+            "error": "desktop bootstrap secret missing or malformed",
+        }), flush=True)
+        raise SystemExit(1)
+
     from gateway.config import PlatformConfig
     from gateway.platforms.api_server import APIServerAdapter, check_api_server_requirements
 
@@ -1460,7 +1836,12 @@ async def main() -> None:
 
     adapter = APIServerAdapter(PlatformConfig(
         enabled=True,
-        extra={"host": "127.0.0.1", "port": api_port},
+        extra={
+            "host": "127.0.0.1",
+            "port": api_port,
+            "key": secret,
+            "cors_origins": ["null"],
+        },
     ))
     if not await adapter.connect():
         print(json.dumps({"ready": False, "error": "api server failed to start"}), flush=True)
@@ -1480,7 +1861,7 @@ async def main() -> None:
 
     from aiohttp import web
 
-    runner = web.AppRunner(build_desktop_app(api_port))
+    runner = web.AppRunner(build_desktop_app(api_port, secret))
     await runner.setup()
     site = web.TCPSite(runner, "127.0.0.1", desktop_port)
     await site.start()

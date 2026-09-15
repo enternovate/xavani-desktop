@@ -3,10 +3,12 @@
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy"
-        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*">
+        content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; worker-src 'self' blob:">
   <title>Xavani</title>
   <link rel="stylesheet" href="vendor/xterm.css">
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="workbench.css">
+  <link rel="stylesheet" href="vendor/monaco.bundle.css">
 </head>
 <body>
   <div id="boot">
@@ -17,6 +19,7 @@
   </div>
 
   <div id="app" class="hidden">
+    <div id="wb-region-activity" class="wb-region" data-region="activity" aria-label="Chat and sessions">
     <aside id="sidebar">
       <div class="brand">
         <img src="assets/mark.png" alt="" class="brand-mark">
@@ -79,7 +82,10 @@
         </div>
       </div>
     </aside>
+    </div>
 
+    <div id="wb-region-explorer" class="wb-region" data-region="explorer">
+      <div id="wb-resize-explorer" class="wb-resize wb-resize-v" role="separator" aria-orientation="vertical" aria-label="Resize Explorer" title="Drag to resize — arrow keys adjust" tabindex="0"></div>
     <aside id="explorer" class="hidden">
       <div class="explorer-head">
         <span class="explorer-title">Explorer</span>
@@ -96,7 +102,9 @@
       </div>
       <div id="file-tree"><div class="empty">Loading…</div></div>
     </aside>
+    </div>
 
+    <div id="wb-region-editor" class="wb-region" data-region="editor">
     <main id="main">
       <header id="topbar">
         <div id="topbar-title">Chat</div>
@@ -182,26 +190,37 @@
           <pre id="editor-hl" class="mono" aria-hidden="true"></pre>
           <textarea id="editor" class="mono" spellcheck="false" autocomplete="off" wrap="off"></textarea>
           <div id="editor-empty" class="empty">No file open.<br><br>Pick one from the Explorer on the left, or start a dev server and load it in the Preview on the right.</div>
+          <div id="monaco-host"></div>
         </div>
         <div id="studio-help" class="mono">/studio toggles this layout · ⌘S saves · Visual edit (right dock) moves, deletes, recolours &amp; animates elements</div>
       </section>
     </main>
+    </div>
 
+    <div id="wb-region-agent" class="wb-region" data-region="agent">
     <aside id="dock">
-      <div id="dock-resize" title="Drag to resize — double-click to reset"></div>
+      <div id="dock-resize" role="separator" aria-orientation="vertical" aria-label="Resize Agent pane" tabindex="0" title="Drag to resize — double-click to reset, arrow keys adjust"></div>
       <div class="dock-bar">
         <div class="dock-tabs-head">
           <button class="dock-tab active" id="tab-preview" data-docktab="preview">Preview</button>
           <button class="dock-tab" id="tab-todo" data-docktab="todo">To-Do</button>
+          <button class="dock-tab" id="tab-business" data-docktab="business">Business</button>
+          <button class="dock-tab" id="tab-timeline" data-docktab="timeline">Timeline</button>
         </div>
+        <button id="dock-flip" class="btn ghost sm" title="Flip between Preview and the last changed file (⌘⌥F)" aria-disabled="false">⇄ Preview / Files</button>
         <input id="dock-url" class="mono" placeholder="http://localhost:3000" value="http://localhost:3000">
         <button id="dock-go" class="btn ghost sm">Go</button>
         <button id="dock-edit" class="btn ghost sm" title="Visual edit: click elements, drag spacing, then send changes to the agent">Visual edit</button>
+        <button id="rec-main" class="btn ghost sm" title="Screen capture — explicit start; a source picker opens first, and no capture happens before that">● Capture</button>
+        <button id="rec-stop" class="btn ghost sm hidden">Stop</button>
+        <button id="rec-discard" class="btn ghost sm hidden">Discard</button>
+        <span id="rec-state" class="mono dim"></span>
+        <div id="rec-picker" class="rec-picker hidden"></div>
         <button id="dock-close" class="btn ghost sm" title="Close preview">×</button>
       </div>
       <div id="dock-tabs"></div>
       <div class="dock-body">
-        <webview id="dock-webview" src="about:blank" allowpopups></webview>
+        <webview id="dock-webview" src="about:blank"></webview>
         <div id="dock-todoview" class="hidden">
           <div class="todo-addrow">
             <input id="todo-input" placeholder="Add a task…" spellcheck="false">
@@ -209,6 +228,29 @@
           </div>
           <div id="todo-hint" class="todo-hint">Drag to prioritise. Top item = highest priority.</div>
           <div id="todo-list"></div>
+        </div>
+        <div id="dock-businessview" class="hidden">
+          <div class="biz-controls">
+            <select id="biz-workflow" aria-label="Workflow"></select>
+            <input id="biz-period" class="mono" placeholder="period e.g. 2026-Q2" spellcheck="false">
+            <input id="biz-currency" class="mono" placeholder="currency e.g. ZAR" spellcheck="false">
+            <button id="biz-run" class="btn primary sm" disabled>Run workflow</button>
+          </div>
+          <div id="biz-missing" class="biz-missing hidden"></div>
+          <div class="biz-section"><div class="biz-section-head">Sources</div><div id="biz-sources" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Drafts</div><div id="biz-drafts" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Checks</div><div id="biz-checks" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Approvals</div><div id="biz-approvals" class="biz-list"></div></div>
+          <div class="biz-section"><div class="biz-section-head">Outstanding work</div><div id="biz-outstanding" class="biz-list"></div></div>
+        </div>
+        <div id="dock-timelineview" class="hidden">
+          <div class="tl-controls">
+            <span id="tl-session" class="mono dim"></span>
+            <span class="flex-spacer"></span>
+            <button id="tl-replay" class="btn ghost sm" title="Re-render the recorded events — replay is read-only">Replay</button>
+            <button id="tl-export" class="btn ghost sm" title="Export the timeline with a native save dialog">Export</button>
+          </div>
+          <div id="tl-events" class="tl-events"></div>
         </div>
         <div id="dock-fileview" class="hidden">
           <div id="dock-filepath" class="mono"></div>
@@ -222,6 +264,22 @@
         <div id="dock-hint" class="empty">Preview your running app or website here.<br><br>Start a dev server (e.g. <span class="mono">npm run dev</span>) in a project, enter its URL above, and hit Go.<br>Use <b>Visual edit</b> to adjust spacing and layout by hand, then send the changes to the agent.<br><br><span class="mono dim">/flip</span> switches between this preview and files the agent is writing.</div>
       </div>
     </aside>
+    </div>
+
+    <div id="wb-region-bottom" class="wb-region" data-region="bottom" aria-label="Bottom pane">
+      <div id="wb-resize-bottom" class="wb-resize wb-resize-h" role="separator" aria-orientation="horizontal" aria-label="Resize bottom pane" title="Drag to resize — arrow keys adjust" tabindex="0"></div>
+      <div id="wb-problems" class="wb-problems" aria-label="Problems">
+        <div class="wb-problems-head">Problems <span id="problems-status" class="mono"></span></div>
+        <div id="problems-list" class="wb-problems-list"><div class="empty">No problems.</div></div>
+      </div>
+    </div>
+
+    <div id="wb-region-status" class="wb-region" data-region="status" aria-label="Workbench status">
+      <span class="wb-status-item">Workspace <span id="wb-status-ws" class="mono">none</span></span>
+      <span class="wb-status-item wb-status-optional" id="wb-status-layout">240 · 360 · 220</span>
+      <span class="wb-status-item wb-status-optional" id="wb-status-follow">follow on</span>
+      <button id="wb-reset-layout" class="wb-status-btn" title="Reset pane sizes for this workspace">Reset layout</button>
+    </div>
 
     <div id="wizard" class="hidden">
       <div id="wizard-card">
@@ -266,6 +324,14 @@
   <script src="vendor/purify.min.js"></script>
   <script src="vendor/xterm.js"></script>
   <script src="vendor/xterm-addon-fit.js"></script>
+  <script src="run-state.js"></script>
+  <script src="workbench-state.js"></script>
+  <script src="business-view.js"></script>
+  <script src="timeline.js"></script>
+  <script src="../recording.js"></script>
+  <script src="recording-controls.js"></script>
+  <script src="vendor/monaco.bundle.js"></script>
+  <script src="editor-adapter.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

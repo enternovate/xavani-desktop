@@ -1,0 +1,277 @@
+/* Xavani Desktop — workbench shell (R2 Task 13).
+   Loaded after styles.css during the transition: it turns #app into the
+   named-area grid (activity · explorer · editor · agent · bottom · status)
+   and carries the desktop specification's dimensions and tokens.
+   Panel boundaries are grid tracks and borders — never negative margins. */
+
+:root {
+  --workbench-bg: #0b1017;
+  --workbench-panel: #111923;
+  --workbench-raised: #182331;
+  --workbench-border: #425368;
+  --workbench-text: #e7edf5;
+  --workbench-muted: #a9b6c6;
+  --workbench-accent: #69adff;
+  --workbench-success: #79d99e;
+  --workbench-warning: #f0c36c;
+  --workbench-danger: #ff9898;
+
+  /* Design constants (CSS px). Pane sizes come from the workbench state. */
+  --workbench-titlebar-h: 40px;
+  --workbench-activity-w: 44px;
+  --workbench-status-h: 24px;
+  --workbench-radius: 4px;
+  --workbench-focus-w: 2px;
+  --workbench-control-h: 28px;
+  --workbench-icon: 32px;
+  --workbench-motion: 120ms;
+  --workbench-font: 13px;
+  --workbench-line: 20px;
+  --workbench-space-1: 4px;
+  --workbench-space-2: 8px;
+  --workbench-space-3: 12px;
+  --workbench-space-4: 16px;
+  --workbench-space-5: 24px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0s !important;
+    transition-duration: 0s !important;
+  }
+}
+
+/* ---------- the shell grid ---------- */
+
+#app {
+  display: grid;
+  height: 100vh;
+  overflow: hidden;
+  /* The state module owns --wb-*-size; the shell decides whether a pane
+     is on screen at all. */
+  --wb-explorer-width: var(--wb-explorer-size, 240px);
+  --wb-agent-width: var(--wb-agent-size, 360px);
+  --wb-bottom-height: var(--wb-bottom-size, 220px);
+  --wb-activity-width: 0px;
+  grid-template-columns: var(--wb-activity-width) var(--wb-explorer-width) minmax(0, 1fr) var(--wb-agent-width);
+  grid-template-rows: minmax(0, 1fr) var(--wb-bottom-height) var(--workbench-status-h);
+  grid-template-areas:
+    "activity explorer editor agent"
+    "activity explorer bottom agent"
+    "status   status   status status";
+}
+
+/* Chat mode: the sidebar is the activity column and the workbench panes are
+   off screen. Studio mode switches the columns over without touching IDs. */
+#app:not(.studio) {
+  --wb-activity-width: var(--sidebar-w);
+  --wb-explorer-width: 0px;
+  --wb-bottom-height: 0px;
+}
+#app.studio #sidebar { display: none; }
+#app:not(.dock-open) { --wb-agent-width: 0px; }
+
+.wb-region {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  color: var(--workbench-text);
+  font-size: var(--workbench-font);
+  line-height: var(--workbench-line);
+}
+
+#app [data-region="activity"] { grid-area: activity; overflow: hidden; }
+#app [data-region="explorer"] { grid-area: explorer; overflow: hidden; }
+#app [data-region="editor"] { grid-area: editor; overflow: hidden; }
+#app [data-region="agent"] { grid-area: agent; overflow: hidden; }
+
+/* The panes fill the tracks the shell gives them. */
+#app [data-region="explorer"] #explorer { width: 100%; min-width: 0; flex: 1; }
+#app [data-region="agent"] #dock { width: 100%; min-width: 0; flex: 1; }
+
+/* ---------- bottom region ---------- */
+
+#app [data-region="bottom"] {
+  grid-area: bottom;
+  border-top: 1px solid var(--workbench-border);
+  background: var(--workbench-panel);
+  overflow: hidden;
+}
+#app:not(.studio) [data-region="bottom"] { display: none; }
+.wb-bottom-note {
+  padding: var(--workbench-space-3) var(--workbench-space-4);
+  color: var(--workbench-muted);
+  font-size: var(--workbench-font);
+}
+
+/* ---------- status region ---------- */
+
+#app [data-region="status"] {
+  grid-area: status;
+  flex-direction: row;
+  align-items: center;
+  gap: var(--workbench-space-3);
+  padding: 0 var(--workbench-space-2) 0 var(--workbench-space-3);
+  border-top: 1px solid var(--workbench-border);
+  background: var(--workbench-raised);
+  color: var(--workbench-muted);
+  height: var(--workbench-status-h);
+  font-size: 11px;
+}
+.wb-status-item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--workbench-space-1);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wb-status-item .mono { color: var(--workbench-text); }
+.wb-status-btn {
+  min-height: var(--workbench-control-h);
+  padding: 0 var(--workbench-space-2);
+  margin-left: auto;
+  border: 1px solid var(--workbench-border);
+  border-radius: var(--workbench-radius);
+  background: transparent;
+  color: var(--workbench-text);
+  font: inherit;
+  cursor: pointer;
+  transition: background-color var(--workbench-motion) ease;
+}
+.wb-status-btn:hover { background: rgba(105, 173, 255, 0.16); }
+
+/* ---------- resize handles ---------- */
+
+.wb-resize { position: absolute; z-index: 40; background: transparent; }
+.wb-resize-v { top: 0; bottom: 0; width: 6px; cursor: col-resize; }
+.wb-resize-h { left: 0; right: 0; height: 6px; cursor: row-resize; }
+#wb-resize-explorer { right: -3px; }
+#wb-resize-bottom { top: -3px; }
+
+.wb-resize[role="separator"] { touch-action: none; }
+.wb-resize[role="separator"]:hover,
+.wb-resize[role="separator"]:focus-visible,
+body.wb-resizing .wb-resize[role="separator"] {
+  background: var(--workbench-accent);
+  opacity: 0.55;
+}
+.wb-resize[role="separator"]:focus-visible,
+#dock-resize[role="separator"]:focus-visible {
+  outline: var(--workbench-focus-w) solid var(--workbench-accent);
+  outline-offset: calc(-1 * var(--workbench-focus-w));
+  opacity: 0.8;
+}
+body.wb-resizing { user-select: none; }
+
+/* Primary controls keep the 28 px minimum height in the shell chrome. */
+#app [data-region="status"] button { min-height: var(--workbench-control-h); }
+
+/* ---------- compact layout ----------
+   Below 1020 px the side panes sit at their specification minima and the
+   secondary status text drops, so nothing needs horizontal page scrolling. */
+@media (max-width: 1020px) {
+  #app {
+    --wb-explorer-width: 180px;
+    --wb-agent-width: 300px;
+    --wb-bottom-height: 120px;
+  }
+  .wb-status-optional { display: none; }
+}
+
+/* 200% zoom lands here: one column at a time, still no page-level scroll. */
+@media (max-width: 760px) {
+  #app {
+    grid-template-columns: var(--wb-activity-width) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) var(--workbench-status-h);
+    grid-template-areas:
+      "activity editor"
+      "status   status";
+  }
+  #app [data-region="explorer"],
+  #app [data-region="agent"],
+  #app [data-region="bottom"] { display: none; }
+}
+
+/* ---------- flip transition ----------
+   The preview ⇄ files swap fades over 120 ms — opacity only, never a
+   rotating page animation. The reduced-motion block above removes it. */
+.wb-flip-fade { animation: wb-flip-fade var(--workbench-motion) ease; }
+@keyframes wb-flip-fade { from { opacity: 0; } to { opacity: 1; } }
+#dock-flip.is-disabled { opacity: 0.55; }
+
+/* ---------- monaco editor + problems (task 15) ---------- */
+
+#monaco-host { display: none; position: absolute; inset: 0; }
+#app.monaco-on #monaco-host { display: block; }
+#app.monaco-on #editor,
+#app.monaco-on #editor-gutter,
+#app.monaco-on #editor-hl { display: none !important; }
+
+.wb-problems { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.wb-problems-head {
+  display: flex; gap: var(--workbench-space-2); align-items: center;
+  padding: 4px 12px; font-size: 11px; color: var(--workbench-muted);
+  border-bottom: 1px solid var(--workbench-border);
+}
+.wb-problems-list { flex: 1; overflow: auto; padding: 4px 6px; }
+.problem-item {
+  display: block; width: 100%; text-align: left; background: none; border: 0;
+  color: var(--workbench-text); font: inherit; font-size: 11px;
+  padding: 3px 8px; border-radius: var(--workbench-radius); cursor: pointer;
+}
+.problem-item:hover,
+.problem-item:focus-visible { background: rgba(105, 173, 255, 0.16); outline: none; }
+
+/* ---------- business view (task 21) ---------- */
+
+#dock-businessview { display: flex; flex-direction: column; gap: 6px; overflow: auto; padding: 8px; height: 100%; }
+#dock-businessview.hidden { display: none; }
+.biz-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.biz-controls select,
+.biz-controls input {
+  background: var(--workbench-panel); color: var(--workbench-text);
+  border: 1px solid var(--workbench-border); border-radius: var(--workbench-radius);
+  padding: 3px 6px; font-size: 11px;
+}
+.biz-missing { color: #f0b429; font-size: 11px; }
+.biz-missing.hidden { display: none; }
+.biz-section-head {
+  color: var(--workbench-muted); font-size: 10px; text-transform: uppercase;
+  letter-spacing: 0.04em; margin: 6px 0 2px;
+}
+.biz-list { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.biz-item { padding: 2px 6px; border-radius: var(--workbench-radius); }
+.biz-item.unavailable,
+.biz-item.denied { color: #ff8f8f; }
+.biz-item.failed { color: #ffc46b; }
+.biz-decision { margin-left: 6px; }
+
+/* ---------- work timeline (task 22) ---------- */
+
+#dock-timelineview { display: flex; flex-direction: column; gap: 6px; overflow: auto; padding: 8px; height: 100%; }
+#dock-timelineview.hidden { display: none; }
+.tl-controls { display: flex; gap: 6px; align-items: center; }
+.tl-events { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
+.tl-item { display: flex; gap: 8px; align-items: baseline; padding: 2px 6px; border-radius: var(--workbench-radius); }
+.tl-item .tl-time { color: var(--workbench-muted); flex-shrink: 0; font-size: 10px; }
+.tl-item .tl-title { flex-shrink: 0; }
+.tl-item .tl-detail { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tl-task-blocked .tl-title,
+.tl-tool-completed.tl-failed .tl-title { color: #ff8f8f; }
+
+/* ---------- capture controls (task 23) ---------- */
+
+#rec-state { font-size: 10px; }
+.rec-picker {
+  position: fixed; top: 44px; right: 16px; z-index: 60;
+  background: var(--workbench-panel); color: var(--workbench-text);
+  border: 1px solid var(--workbench-border); border-radius: var(--workbench-radius);
+  padding: 6px; display: flex; flex-direction: column; gap: 4px;
+  max-width: 340px; max-height: 300px; overflow: auto;
+}
+.rec-picker.hidden { display: none; }
+.rec-picker .rec-source { text-align: left; }

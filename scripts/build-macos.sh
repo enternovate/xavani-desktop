@@ -45,6 +45,16 @@ mkdir -p "$RES/app/node_modules"
 cp -R "$ROOT/node_modules/marked" "$RES/app/node_modules/marked"
 cp -R "$ROOT/node_modules/dompurify" "$RES/app/node_modules/dompurify"
 
+echo "==> Legal notices"
+# Task 24b: the app must ship its third-party notices, and Electron's own
+# Chromium/Node notices live outside Electron.app and would otherwise be dropped.
+cp "$ROOT/THIRD_PARTY_NOTICES.md" "$RES/app/THIRD_PARTY_NOTICES.md"
+for notice in LICENSE LICENSES.chromium.html; do
+  if [ -f "$ROOT/node_modules/electron/dist/$notice" ]; then
+    cp "$ROOT/node_modules/electron/dist/$notice" "$RES/$notice"
+  fi
+done
+
 echo "==> Backend launcher"
 cp "$ROOT/backend/serve_desktop.py" "$RES/backend/"
 

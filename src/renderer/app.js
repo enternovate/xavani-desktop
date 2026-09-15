@@ -109,7 +109,7 @@ async function checkOutstanding() {
         kind: 'info',
         ms: 12000,
         onClick: () => {
-          if (!state.dockUserClosed && !$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+          if (!state.dockUserClosed && !wb.dockOpen) $('#dock-toggle').click();
           document.querySelector('#tab-todo').click();
         },
       },
@@ -250,23 +250,31 @@ async function init() {
   setupSlash();
   setupModelMenus();
   loadPrefs();
+  setupWorkbench();
   setupDock();
+  initCaptureControls();
+  initMonacoEditor();
   setupStudio();
   wireComposerClean();
   startActivityPolling();
   startOutstandingReminders();
   setupSidebarFoot();
 
-  window.xavaniDesktop.checkForUpdates().then((info) => {
-    if (info && info.updateAvailable && !localStorage.getItem('xz-update-notified')) {
-      localStorage.setItem('xz-update-notified', info.latest);
-      notify(`Update available: Xavani ${info.latest}`, {
-        kind: 'update',
-        onClick: () => info.url && window.xavaniDesktop.openExternal(info.url),
-        ms: 10000,
-      });
-    }
-  }).catch(() => {});
+  // Update checks are opt-in: nothing is requested unless the user enabled it.
+  const autoUpdateOn = localStorage.getItem('xz-auto-update') === '1';
+  window.xavaniDesktop.setAutoUpdate(autoUpdateOn)
+    .then((on) => (on ? window.xavaniDesktop.checkForUpdates() : null))
+    .then((info) => {
+      if (info && info.updateAvailable && localStorage.getItem('xz-update-notified') !== info.latest) {
+        localStorage.setItem('xz-update-notified', info.latest);
+        notify(`Update available: Xavani ${info.latest}`, {
+          kind: 'update',
+          onClick: () => info.url && window.xavaniDesktop.openExternal(info.url),
+          ms: 10000,
+        });
+      }
+    })
+    .catch(() => {});
 
   $('#send').addEventListener('click', onSend);
   $('#stop').addEventListener('click', onStop);
@@ -295,6 +303,7 @@ async function init() {
 
   document.addEventListener('keydown', (e) => {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'n') { e.preventDefault(); newChat(); }
+    if (e.altKey && (e.metaKey || e.ctrlKey) && e.code === 'KeyF') { e.preventDefault(); dockFlip(); }
   });
 
   $('#toggle-cli').addEventListener('click', () => {
@@ -547,6 +556,23 @@ async function consumeEvents(runId, block) {
   let renderQueued = false;
   let toolsBox = null;
   let reasoningBox = null;
+  // R1 10b: every parsed event is folded through the pure run-state reducer,
+  // and tool cards are keyed by tool_call_id — out-of-order or replayed
+  // events can no longer land on the wrong card.
+  let runState = window.XavaniRunState.initialRunState(runId);
+  const toolCards = new Map();
+
+  // A stream that ends without a terminal run event means the outcome is
+  // unknown. Say so, instead of letting the block finish as if it succeeded.
+  const noteStreamInterrupted = () => {
+    if (runState.status !== 'interrupted') return;
+    const note = document.createElement('div');
+    note.className = 'stream-warning';
+    note.style.cssText = 'margin-top:6px;color:var(--red);font-size:12px;';
+    note.textContent = '⚠ stream ended early — run state unknown; do not assume success.';
+    block.appendChild(note);
+    scrollBottom();
+  };
 
   const toolsContainer = () => {
     if (!toolsBox) {
@@ -614,18 +640,29 @@ async function consumeEvents(runId, block) {
       if (!dataLine) continue;
       let evt;
       try { evt = JSON.parse(dataLine.slice(5).trim()); } catch { continue; }
+      runState = window.XavaniRunState.applyRunEvent(runState, evt);
 
       switch (evt.event) {
         case 'message.delta':
           acc += evt.delta || '';
           schedulePaint();
           break;
-        case 'tool.started':
-          evt._card = addToolCard(evt);
+        case 'tool.started': {
+          const card = addToolCard(evt);
+          if (card && typeof evt.tool_call_id === 'string' && evt.tool_call_id) {
+            card._toolCallId = evt.tool_call_id;
+            toolCards.set(evt.tool_call_id, card);
+          }
           agentTouchedFile(evt);
           break;
+        }
         case 'tool.completed': {
-          const card = evt._card || toolsBox && toolsBox.lastElementChild;
+          // Identity first: the card for this exact tool call, never "the
+          // last card in the box" — completions can arrive out of order.
+          const id = typeof evt.tool_call_id === 'string' && evt.tool_call_id ? evt.tool_call_id : null;
+          const card = id
+            ? (toolCards.get(id) || null)
+            : (evt._card || (toolsBox && toolsBox.lastElementChild));
           if (card) {
             card.classList.remove('running');
             card.classList.add(evt.error ? 'error' : 'done');
@@ -652,6 +689,12 @@ async function consumeEvents(runId, block) {
       }
     }
   }
+
+  // The reader is done — clean EOF or a read error, both leave us here.
+  // endRunStream() is a no-op when the run already reported a terminal
+  // status; otherwise the stream was cut short and we say so, loudly.
+  runState = window.XavaniRunState.endRunStream(runState);
+  noteStreamInterrupted();
 
   const finalBlock = await api(`/v1/runs/${runId}`).then((r) => r.json()).catch(() => null);
   if (finalBlock && finalBlock.output && !acc.trim()) acc = finalBlock.output;
@@ -1323,12 +1366,19 @@ async function loadSettings() {
   });
 
   // --- Updates ---
-  const uc = settingsCard('Updates', 'Check GitHub releases for new desktop builds.', 'general');
+  const uc = settingsCard('Updates', 'Check GitHub releases for new desktop builds. Automatic checks are off until you enable them.', 'general');
   const urow = document.createElement('div');
   urow.className = 'set-row';
-  urow.innerHTML = `<button class="btn ghost sm" id="upd-check">Check now</button> <span id="upd-out" class="dim"></span>`;
+  const autoUpd = localStorage.getItem('xz-auto-update') === '1';
+  urow.innerHTML = `<label class="dim"><input type="checkbox" id="upd-auto"${autoUpd ? ' checked' : ''}> Check automatically</label>
+    <button class="btn ghost sm" id="upd-check">Check now</button> <span id="upd-out" class="dim"></span>`;
   uc.appendChild(urow);
   gen.appendChild(uc);
+  uc.querySelector('#upd-auto').addEventListener('change', async (ev) => {
+    const on = ev.target.checked;
+    localStorage.setItem('xz-auto-update', on ? '1' : '0');
+    await window.xavaniDesktop.setAutoUpdate(on);
+  });
   uc.querySelector('#upd-check').addEventListener('click', async () => {
     const out = uc.querySelector('#upd-out');
     out.textContent = 'Checking…';
@@ -1339,15 +1389,25 @@ async function loadSettings() {
   });
 
   // --- About ---
-  const ac = settingsCard('About', '', 'general');
-  ac.appendChild(cardEl(`Xavani Desktop`, `engine ${s.engine_version || '?'} · python ${s.python || '?'}`, null, (() => {
+  const ac = settingsCard('About', 'Xavani Desktop is built and published by Enternovate.', 'general');
+  ac.appendChild(cardEl(`Xavani Desktop`, `engine ${s.engine_version || '?'} · python ${s.python || '?'} · by Enternovate`, null, (() => {
     const b = document.createElement('button');
     b.className = 'btn ghost sm';
     b.textContent = 'Reveal data folder';
     b.addEventListener('click', () => s.xavani_home && window.xavaniDesktop.revealPath(s.xavani_home));
     return b;
   })()));
+  const legalRow = document.createElement('div');
+  legalRow.className = 'set-row';
+  legalRow.innerHTML = `<span class="dim">Third-party notices and licenses (<span class="mono">THIRD_PARTY_NOTICES.md</span>) ship with Xavani Desktop.</span>
+    <button class="btn ghost sm" id="about-notices">Show notices</button>`;
+  ac.appendChild(legalRow);
   gen.appendChild(ac);
+  legalRow.querySelector('#about-notices').addEventListener('click', async () => {
+    const rt = await window.xavaniDesktop.runtime();
+    if (rt && rt.notices) window.xavaniDesktop.revealPath(rt.notices);
+    else notify('THIRD_PARTY_NOTICES.md was not found in this build.', { kind: 'info' });
+  });
 }
 
 /* ---------------- agent ops (loops · eval · diff · permissions) ---------------- */
@@ -1599,6 +1659,7 @@ function setupSlash() {
     { name: 'new', desc: 'Start a fresh chat session', native: true, action: newChat },
     { name: 'studio', desc: 'Toggle Studio: explorer + code editor + live preview', native: true, action: () => toggleStudio() },
     { name: 'flip', desc: "Flip the right dock between the live site and files the agent is writing", native: true, action: () => dockFlip() },
+    { name: 'reset-layout', desc: 'Reset the workbench pane sizes for this workspace', native: true, action: () => wbDispatch({ type: 'reset-layout' }) },
   ];
   state.cliCommands = [...nativeCommands, ...state.cliCommands];
   buildChips();
@@ -1781,7 +1842,12 @@ function setupModelMenus() {
   $('#mf-cancel').addEventListener('click', closeModal);
   $('#modal-backdrop').addEventListener('click', (e) => { if (e.target.id === 'modal-backdrop') closeModal(); });
   $('#mf-save').addEventListener('click', saveModal);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      closeModal();
+      if (monacoAdapter) { try { monacoAdapter.closeDiff(); } catch { /* no diff open */ } }
+    }
+  });
 
   const EFFORTS = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
   $('#chip-effort').addEventListener('click', () => {
@@ -1994,7 +2060,7 @@ async function submitTranscription(blob) {
 const WIZ_SOURCES = [
   { id: 'claude_code', label: 'Claude Code' },
   { id: 'codex', label: 'Codex CLI' },
-  { id: 'hermes', label: 'Hermes Agent' },
+  { id: 'hermes', label: 'Legacy Agent' },
   { id: 'cursor', label: 'Cursor' },
 ];
 
@@ -2126,24 +2192,19 @@ async function openWizard() {
     },
     {
       title: 'Set your workspace',
-      sub: 'Default folder for the file explorer and Studio. Use ~ for home.',
+      sub: 'Default folder for the file explorer and Studio. Continue opens the native folder picker.',
       body: () => `<div class="wiz-title">Set your workspace</div>
         <div class="wiz-sub">${steps[4].sub}</div>
-        ${wizField('Workspace root', '<input id="wz-root" class="mono" placeholder="~/projects">')}
+        ${wizField('Workspace root', '<input id="wz-root" class="mono" placeholder="not selected" readonly>')}
         <span id="wz-root-out" class="dim"></span>`,
       onshow: () => {
         dapi('/desktop/api/fs/root').then((r) => r.json()).then((d) => { $('#wz-root').value = d.root || ''; }).catch(() => {});
       },
       next: async () => {
-        const root = $('#wz-root').value.trim();
-        if (!root) return;
-        const res = await dapi('/desktop/api/fs/root', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ root }),
-        });
-        const d = await res.json();
-        if (d.error) throw new Error(d.error);
+        // A workspace grant is native-only: the renderer cannot POST fs/root.
+        const res = await window.xavaniDesktop.chooseWorkspace();
+        if (res && res.ok) { $('#wz-root').value = res.root; return; }
+        if (res && res.error) throw new Error(res.error);
       },
     },
     {
@@ -2199,12 +2260,12 @@ async function checkFirstRun() {
 
 function setupDock() {
   $('#dock-toggle').addEventListener('click', () => {
-    $('#app').classList.toggle('dock-open');
+    wbDispatch({ type: wb.dockOpen ? 'close-dock' : 'open-dock' });
     setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
   });
   $('#dock-close').addEventListener('click', () => {
     state.dockUserClosed = true;
-    $('#app').classList.remove('dock-open');
+    wbDispatch({ type: 'close-dock' });
   });
   $('#dock-toggle').addEventListener('click', () => { state.dockUserClosed = false; });
   const go = () => {
@@ -2634,7 +2695,7 @@ function toggleStudio(force) {
   if (studio.open) {
     switchView('studio');
     state.dockUserClosed = false;
-    if (!$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
+    if (!wb.dockOpen) wbDispatch({ type: 'open-dock' });
     loadWorkspaceRoot();
   } else {
     switchView('chat');
@@ -2650,7 +2711,7 @@ function setupStudio() {
   $('#fs-refresh').addEventListener('click', () => renderTree(studio.root));
   $('#fs-newfile').addEventListener('click', () => fsCreate('newfile'));
   $('#fs-newdir').addEventListener('click', () => fsCreate('mkdir'));
-  $('#editor-save').addEventListener('click', saveActiveFile);
+  $('#editor-save').addEventListener('click', () => saveActiveFile());
 
   const editor = $('#editor');
   editor.addEventListener('input', () => {
@@ -2658,6 +2719,7 @@ function setupStudio() {
     if (tab) {
       tab.dirty = true;
       tab.content = editor.value;
+      wbDispatch({ type: 'dirty', value: true });
       renderTabs();
     }
     syncGutter();
@@ -2677,32 +2739,49 @@ function setupStudio() {
   });
 }
 
-async function setWorkspaceRoot() {
-  const p = $('#ws-root').value.trim();
-  if (!p) return;
+/* The workspace root is granted natively (main-process dialog → POST fs/root
+   with X-Xavani-Native). A renderer POST to fs/root is refused by design. */
+async function chooseWorkspaceRoot() {
+  wbDispatch({ type: 'transition', value: true });
   try {
-    const res = await dapi('/desktop/api/fs/root', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ root: p }),
-    });
-    const d = await res.json();
-    if (d.error) { treeError(d.error); return; }
-    studio.root = d.root;
+    const res = await window.xavaniDesktop.chooseWorkspace();
+    if (!res || res.cancelled) return null;
+    if (!res.ok) { treeError(res.error || 'Workspace grant failed'); return null; }
+    studio.root = res.root;
     studio.expanded = {};
     studio.selectedDir = null;
-    renderTree(studio.root);
-  } catch (err) { treeError(String(err)); }
+    $('#ws-root').value = res.root;
+    wbSwitchWorkspace(wbWorkspaceId());
+    renderTree(res.root);
+    return res;
+  } catch (err) { treeError(String(err)); return null; }
+  finally { wbDispatch({ type: 'transition', value: false }); }
 }
 
+async function setWorkspaceRoot() {
+  await chooseWorkspaceRoot();
+}
+
+function workspaceRequired(d) { return !!d && d.error === 'Workspace required'; }
+
 async function loadWorkspaceRoot() {
+  wbDispatch({ type: 'transition', value: true });
   try {
     const res = await dapi('/desktop/api/fs/root');
     const d = await res.json();
+    if (workspaceRequired(d)) {
+      studio.root = null;
+      $('#ws-root').value = '';
+      wbSwitchWorkspace(wbWorkspaceId());
+      treeError(d.error);
+      return;
+    }
     studio.root = d.root;
     $('#ws-root').value = d.root;
+    wbSwitchWorkspace(wbWorkspaceId());
     renderTree(d.root);
   } catch { treeError('Backend unreachable'); }
+  finally { wbDispatch({ type: 'transition', value: false }); }
 }
 
 function treeError(msg) { $('#file-tree').innerHTML = `<div class="empty">${escapeHtml(msg)}</div>`; }
@@ -2715,6 +2794,7 @@ async function renderTree(dir) {
   try {
     const res = await dapi(`/desktop/api/fs/tree?path=${encodeURIComponent(dir)}`);
     const d = await res.json();
+    if (workspaceRequired(d)) { studio.root = null; treeError(d.error); return; }
     if (d.error) { if (dir === studio.root) treeError(d.error); return; }
     const container = dir === studio.root ? box : box.querySelector(`[data-dir="${cssEscape(dir)}"]`);
     if (!container) return;
@@ -2781,9 +2861,207 @@ function closeTabsUnder(path) {
   const dead = studio.tabs.filter((t) => t.path.startsWith(prefix));
   if (!dead.length) return;
   studio.tabs = studio.tabs.filter((t) => !dead.includes(t));
+  if (monacoAdapter) {
+    for (const t of dead) { try { monacoAdapter.closeFile(t.path); } catch { /* dirty stays open */ } }
+  }
   if (dead.some((t) => t.path === studio.activePath)) {
     activateTab(studio.tabs.length ? studio.tabs[studio.tabs.length - 1].path : '');
   } else renderTabs();
+}
+
+/* ---------------- monaco editor (R2 Task 15) ----------------
+   Code Pack L's adapter owns the buffers; every write goes through the
+   workspace API's expected-revision route. The legacy textarea editor
+   stays behind localStorage xz-editor = "legacy". */
+
+let monacoAdapter = null;
+
+function monacoWanted() {
+  try { return localStorage.getItem('xz-editor') !== 'legacy'; } catch { return true; }
+}
+
+function saveFileThroughApi(path, content, expectedRevision) {
+  return dapi('/desktop/api/fs/write', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ path, content, expected_revision: expectedRevision }),
+  }).then(async (res) => {
+    const d = await res.json().catch(() => ({}));
+    if (res.status === 409) {
+      const err = new Error(d.error || 'The file changed on disk since it was read.');
+      err.conflict = d;
+      throw err;
+    }
+    if (!res.ok || d.error) throw new Error(d.error || `Save failed (${res.status}).`);
+    return d;
+  });
+}
+
+function initMonacoEditor() {
+  if (!monacoWanted() || !window.monaco || !window.XavaniEditor || !$('#monaco-host')) return false;
+  try {
+    self.MonacoEnvironment = { getWorker: () => new Worker('editor-worker.js') };
+    monaco.editor.defineTheme('xavani-dark', {
+      base: 'vs-dark',
+      inherit: true,
+      rules: [],
+      colors: { 'editor.background': '#0b0c0e', 'editorGutter.background': '#0b0c0e' },
+    });
+    monaco.editor.setTheme('xavani-dark');
+    monacoAdapter = window.XavaniEditor.createEditorAdapter(window.monaco, $('#monaco-host'), saveFileThroughApi);
+    monacoAdapter.editor.onDidChangeModelContent(() => {
+      const tab = activeTab();
+      if (!tab) return;
+      tab.dirty = monacoAdapter.isDirty();
+      wbDispatch({ type: 'dirty', value: tab.dirty });
+      renderTabs();
+    });
+    $('#app').classList.add('monaco-on');
+    refreshProblems();
+    return true;
+  } catch (err) {
+    console.error('[monaco] init failed:', err);
+    monacoAdapter = null;
+    return false;
+  }
+}
+
+async function refreshProblems() {
+  const list = $('#problems-list');
+  const status = $('#problems-status');
+  if (!list) return;
+  if (!monacoAdapter) {
+    if (status) status.textContent = '';
+    list.innerHTML = '<div class="empty">The Monaco editor is off.</div>';
+    return;
+  }
+  const path = monacoAdapter.activePath();
+  if (!path) {
+    if (status) status.textContent = '';
+    list.innerHTML = '<div class="empty">No file open.</div>';
+    return;
+  }
+  try {
+    const res = await dapi(`/desktop/api/lsp/diagnostics?path=${encodeURIComponent(path)}`);
+    const d = await res.json();
+    if (!d.available) {
+      if (status) status.textContent = 'LSP unavailable';
+      list.innerHTML = '<div class="empty">No language server reports for this file.</div>';
+      return;
+    }
+    const diags = d.diagnostics || [];
+    monacoAdapter.setDiagnostics(path, diags, monacoAdapter.modelVersion(path));
+    renderProblems(path, diags);
+  } catch {
+    if (status) status.textContent = 'LSP unavailable';
+  }
+}
+
+function renderProblems(path, diags) {
+  const list = $('#problems-list');
+  const status = $('#problems-status');
+  if (status) status.textContent = diags.length ? `${diags.length} problem${diags.length === 1 ? '' : 's'}` : 'clean';
+  if (!diags.length) {
+    list.innerHTML = '<div class="empty">No problems in the open file.</div>';
+    return;
+  }
+  list.innerHTML = '';
+  for (const dg of diags) {
+    const line = (((dg.range || {}).start || {}).line || 0) + 1;
+    const col = (((dg.range || {}).start || {}).character || 0) + 1;
+    const btn = document.createElement('button');
+    btn.className = 'problem-item';
+    btn.textContent = `${path}:${line} — ${dg.message || 'problem'}`;
+    btn.title = 'Go to this position';
+    btn.addEventListener('click', () => {
+      try {
+        monacoAdapter.editor.setPosition({ lineNumber: line, column: col });
+        monacoAdapter.editor.focus();
+      } catch { /* the model may have closed underneath */ }
+    });
+    list.appendChild(btn);
+  }
+}
+
+async function saveActiveFileMonaco(force) {
+  const tab = activeTab();
+  if (!tab) return;
+  const expected = (force && force.revision) || tab.revision;
+  if (!expected) { $('#save-state').textContent = 'No revision — reopen the file'; return; }
+  $('#save-state').textContent = 'Saving…';
+  try {
+    let revision;
+    if (force && force.revision) {
+      // The conflict view's overwrite path: write against the disk revision,
+      // then adopt the written content as the new clean base.
+      const model = monacoAdapter.editor.getModel();
+      const content = model ? model.getValue() : tab.content;
+      const result = await saveFileThroughApi(tab.path, content, force.revision);
+      revision = result.revision;
+      monacoAdapter.rebaseFile(tab.path, content, revision);
+    } else {
+      const result = await monacoAdapter.saveActive();
+      revision = result && result.revision;
+    }
+    tab.revision = revision || tab.revision;
+    const model = monacoAdapter.editor.getModel();
+    if (model && monacoAdapter.activePath() === tab.path) { tab.content = model.getValue(); tab.base = tab.content; }
+    tab.dirty = monacoAdapter.isDirty(tab.path);
+    wbDispatch({ type: 'dirty', value: tab.dirty });
+    closeMonacoConflict();
+    $('#save-state').textContent = `Saved ${new Date().toLocaleTimeString()}`;
+    renderTabs();
+    refreshProblems();
+  } catch (err) {
+    tab.dirty = true;
+    wbDispatch({ type: 'dirty', value: true });
+    renderTabs();
+    if (err && err.conflict) {
+      $('#save-state').textContent = 'Conflict — file changed on disk';
+      let disk = err.conflict.disk;
+      if (typeof disk !== 'string') {
+        try {
+          const again = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(tab.path)}`);
+          const fresh = await again.json();
+          if (!fresh.error) { disk = fresh.content; err.conflict.current_revision = fresh.revision; }
+        } catch { /* keep the empty disk pane */ }
+      }
+      showMonacoConflict(tab, typeof disk === 'string' ? disk : '', err.conflict.current_revision);
+    } else {
+      $('#save-state').textContent = `Save failed: ${(err && err.message) || err}`;
+    }
+  }
+}
+
+function showMonacoConflict(tab, disk, diskRevision) {
+  closeMonacoConflict();
+  monacoAdapter.openDiff(tab.path, tab.base == null ? '' : tab.base, disk);
+  const box = document.createElement('div');
+  box.id = 'conflict-view';
+  box.className = 'conflict-view mono';
+  box.style.cssText = 'position:absolute;left:0;right:0;top:0;z-index:5;display:flex;gap:8px;align-items:center;padding:8px 12px;background:#1a130d;border-bottom:1px solid #f0b429';
+  box.innerHTML = `<span style="color:#f0b429">⚠ ${escapeHtml(tab.name)} changed on disk — your buffer was not saved.</span>
+    <span class="flex-spacer"></span>
+    <button id="cf-keep" class="btn sm">Overwrite disk</button>
+    <button id="cf-reload" class="btn ghost sm">Reload from disk</button>
+    <button id="cf-dismiss" class="btn ghost sm">Keep editing</button>`;
+  box.querySelector('#cf-keep').addEventListener('click', () => { closeMonacoConflict(); saveActiveFile({ revision: diskRevision }); });
+  box.querySelector('#cf-reload').addEventListener('click', () => {
+    closeMonacoConflict();
+    monacoAdapter.rebaseFile(tab.path, disk, diskRevision || '');
+    tab.content = disk; tab.base = disk; tab.revision = diskRevision || ''; tab.dirty = false;
+    wbDispatch({ type: 'dirty', value: false });
+    activateTab(tab.path);
+    $('#save-state').textContent = 'Reloaded from disk';
+    renderTabs();
+  });
+  box.querySelector('#cf-dismiss').addEventListener('click', closeMonacoConflict);
+  $('#editor-wrap').appendChild(box);
+}
+
+function closeMonacoConflict() {
+  if (monacoAdapter) { try { monacoAdapter.closeDiff(); } catch { /* diff may be closed */ } }
+  clearConflict();
 }
 
 /* ----- editor tabs ----- */
@@ -2795,8 +3073,9 @@ async function openFile(path) {
   try {
     const res = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(path)}`);
     const d = await res.json();
+    if (workspaceRequired(d)) { treeError(d.error); return; }
     if (d.error) { $('#save-state').textContent = d.error; return; }
-    studio.tabs.push({ path, name: path.split('/').pop(), content: d.content, dirty: false });
+    studio.tabs.push({ path, name: path.split('/').pop(), content: d.content, base: d.content, revision: d.revision || '', dirty: false });
     activateTab(path);
   } catch (err) { $('#save-state').textContent = String(err); }
 }
@@ -2804,6 +3083,15 @@ async function openFile(path) {
 function activateTab(path) {
   studio.activePath = path || null;
   const tab = activeTab();
+  wbDispatch({ type: 'dirty', value: Boolean(tab && tab.dirty) });
+  if (monacoAdapter) {
+    try { monacoAdapter.closeDiff(); } catch { /* no diff open */ }
+    if (tab) monacoAdapter.openFile({ path: tab.path, content: tab.content, revision: tab.revision });
+    $('#editor-empty').style.display = tab ? 'none' : '';
+    renderTabs();
+    refreshProblems();
+    return;
+  }
   $('#editor-empty').style.display = tab ? 'none' : '';
   $('#editor').style.display = tab ? '' : 'none';
   $('#editor-gutter').style.display = tab ? '' : 'none';
@@ -2827,6 +3115,10 @@ function renderTabs() {
       activateTab(t.path);
     });
     el.querySelector('.tab-close').addEventListener('click', () => {
+      if (monacoAdapter) {
+        try { monacoAdapter.closeFile(t.path); }
+        catch (err) { $('#save-state').textContent = (err && err.message) || String(err); return; }
+      }
       studio.tabs = studio.tabs.filter((x) => x !== t);
       if (studio.activePath === t.path) activateTab(studio.tabs.length ? studio.tabs[studio.tabs.length - 1].path : '');
       else renderTabs();
@@ -2844,22 +3136,92 @@ function syncGutter() {
   g.scrollTop = $('#editor').scrollTop;
 }
 
-async function saveActiveFile() {
+async function saveActiveFile(force) {
+  if (monacoAdapter) { await saveActiveFileMonaco(force); return; }
   const tab = activeTab();
   if (!tab) return;
   tab.content = $('#editor').value;
+  // The save carries the exact revision the buffer was based on.  A forced
+  // overwrite (the conflict view) supplies the current disk revision instead.
+  const expected = (force && force.revision) || tab.revision;
+  if (!expected) { $('#save-state').textContent = 'No revision — reopen the file'; return; }
   try {
     const res = await dapi('/desktop/api/fs/write', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: tab.path, content: tab.content }),
+      body: JSON.stringify({ path: tab.path, content: tab.content, expected_revision: expected }),
     });
     const d = await res.json();
+    if (workspaceRequired(d)) { treeError(d.error); return; }
+    if (res.status === 409) {
+      // The disk moved under the buffer: nothing was written, the buffer stays
+      // dirty, and the conflict review shows base / buffer / disk.
+      tab.dirty = true;
+      wbDispatch({ type: 'dirty', value: true });
+      renderTabs();
+      $('#save-state').textContent = 'Conflict — file changed on disk';
+      let disk = d.disk, revision = d.current_revision;
+      if (disk == null) {
+        try {
+          const again = await dapi(`/desktop/api/fs/file?path=${encodeURIComponent(tab.path)}`);
+          const fresh = await again.json();
+          if (!fresh.error) { disk = fresh.content; revision = fresh.revision; }
+        } catch { /* keep the empty disk pane */ }
+      }
+      showConflict(tab, disk == null ? '' : disk, revision || '');
+      return;
+    }
     if (d.error) { $('#save-state').textContent = d.error; return; }
+    tab.revision = d.revision || '';
+    tab.base = tab.content;
     tab.dirty = false;
+    wbDispatch({ type: 'dirty', value: false });
+    clearConflict();
     $('#save-state').textContent = `Saved ${new Date().toLocaleTimeString()}`;
     renderTabs();
   } catch (err) { $('#save-state').textContent = String(err); }
+}
+
+function clearConflict() {
+  const box = $('#conflict-view');
+  if (box) box.remove();
+}
+
+function showConflict(tab, disk, diskRevision) {
+  clearConflict();
+  const box = document.createElement('div');
+  box.id = 'conflict-view';
+  box.className = 'conflict-view mono';
+  box.style.cssText = 'position:absolute;inset:0;z-index:5;display:flex;flex-direction:column;gap:8px;padding:12px;background:#0d0f11;overflow:auto';
+  box.innerHTML = `
+    <div style="color:#f0b429">⚠ ${escapeHtml(tab.name)} changed on disk. Your buffer was not saved.</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;min-height:120px">
+      <section style="display:flex;flex-direction:column;min-width:0"><h4 style="margin:0 0 4px">Base (loaded)</h4><pre class="cf-base" style="margin:0;overflow:auto;max-height:240px;white-space:pre-wrap"></pre></section>
+      <section style="display:flex;flex-direction:column;min-width:0"><h4 style="margin:0 0 4px">Buffer (yours)</h4><pre class="cf-buffer" style="margin:0;overflow:auto;max-height:240px;white-space:pre-wrap"></pre></section>
+      <section style="display:flex;flex-direction:column;min-width:0"><h4 style="margin:0 0 4px">Disk (external)</h4><pre class="cf-disk" style="margin:0;overflow:auto;max-height:240px;white-space:pre-wrap"></pre></section>
+    </div>
+    <div style="display:flex;gap:8px">
+      <button id="cf-keep" class="btn sm">Overwrite disk with my buffer</button>
+      <button id="cf-reload" class="btn ghost sm">Discard mine, reload disk</button>
+      <button id="cf-dismiss" class="btn ghost sm">Keep editing</button>
+    </div>`;
+  box.querySelector('.cf-base').textContent = tab.base == null ? '' : tab.base;
+  box.querySelector('.cf-buffer').textContent = tab.content;
+  box.querySelector('.cf-disk').textContent = disk;
+  box.querySelector('#cf-keep').addEventListener('click', () => saveActiveFile({ revision: diskRevision }));
+  box.querySelector('#cf-reload').addEventListener('click', () => {
+    tab.content = disk;
+    tab.base = disk;
+    tab.revision = diskRevision;
+    tab.dirty = false;
+    wbDispatch({ type: 'dirty', value: false });
+    clearConflict();
+    activateTab(tab.path);
+    $('#save-state').textContent = 'Reloaded from disk';
+    renderTabs();
+  });
+  box.querySelector('#cf-dismiss').addEventListener('click', clearConflict);
+  $('#editor-wrap').appendChild(box);
 }
 
 function fsCreate(op) {
@@ -2876,13 +3238,135 @@ function fsCreate(op) {
     .catch((err) => treeError(String(err)));
 }
 
+/* ---------------- workbench shell (R2 Task 13) ----------------
+   workbench-state.js owns the dock, the follow flag, and the pane sizes.
+   The classes, CSS variables, and status text below are rendered from that
+   state; nothing here keeps a second copy of those values. */
+
+const WB = globalThis.XavaniWorkbench;
+const WB_LAYOUT_KEY = 'xz-wb-layouts-v1';
+const WB_RESIZE_STEP = 16; // the 16 px spacing token
+const WB_PANE_DIMS = { explorer: 'explorerWidth', agent: 'agentWidth', bottom: 'bottomHeight' };
+
+let wb = WB.initialWorkbench('default');
+
+function wbWorkspaceId() { return studio.root || 'default'; }
+function wbViewport() { return { width: window.innerWidth, height: window.innerHeight }; }
+function wbProfile() {
+  const chip = $('#foot-profile');
+  return (chip && chip.textContent.trim()) || 'default';
+}
+function wbLayoutsKey() { return `${WB_LAYOUT_KEY}:${wbProfile()}`; }
+function wbReadLayouts() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(wbLayoutsKey()) || '{}');
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch { return {}; }
+}
+function wbSaveLayouts() {
+  try { localStorage.setItem(wbLayoutsKey(), JSON.stringify(wb.layouts || {})); } catch {}
+}
+
+function wbDispatch(action) {
+  const next = WB.reduceWorkbench(wb, Object.assign({ viewport: wbViewport() }, action));
+  if (next === wb) return wb;
+  const layoutsChanged = next.layouts !== wb.layouts;
+  wb = next;
+  wbRender();
+  if (layoutsChanged) wbSaveLayouts();
+  return wb;
+}
+
+function wbRender() {
+  const app = $('#app');
+  if (!app) return;
+  app.style.setProperty('--wb-explorer-size', `${wb.explorerWidth}px`);
+  app.style.setProperty('--wb-agent-size', `${wb.agentWidth}px`);
+  app.style.setProperty('--wb-bottom-size', `${wb.bottomHeight}px`);
+  app.classList.toggle('dock-open', wb.dockOpen);
+  const ws = $('#wb-status-ws');
+  if (ws) ws.textContent = studio.root || 'none';
+  const layout = $('#wb-status-layout');
+  if (layout) layout.textContent = `${wb.explorerWidth} · ${wb.agentWidth} · ${wb.bottomHeight}`;
+  const follow = $('#wb-status-follow');
+  if (follow) follow.textContent = `follow ${wb.follow ? 'on' : 'paused'}`;
+  renderDockHead();
+  updateFlipControl();
+}
+
+// Only the switched-to workspace's layout comes back; a stored size is
+// clamped to the viewport it returns into.
+function wbSwitchWorkspace(workspaceId) {
+  wbDispatch({ type: 'workspace', workspaceId });
+  const saved = wbReadLayouts()[workspaceId];
+  if (saved) wbDispatch({ type: 'restore-layout', layout: saved });
+}
+
+function wbFileChanged(path) {
+  wbDispatch({ type: 'file-changed', workspaceId: wb.workspaceId, seq: wb.lastFileSeq + 1, path });
+}
+
+function setupWorkbench() {
+  wb = WB.initialWorkbench(wbWorkspaceId());
+  const saved = wbReadLayouts()[wb.workspaceId];
+  if (saved) wb = WB.reduceWorkbench(wb, { type: 'restore-layout', layout: saved, viewport: wbViewport() });
+  wbSaveLayouts();
+
+  wbBindResize($('#wb-resize-explorer'), 'explorer', 'x');
+  wbBindResize($('#wb-resize-bottom'), 'bottom', 'y');
+  const reset = $('#wb-reset-layout');
+  if (reset) reset.addEventListener('click', () => wbDispatch({ type: 'reset-layout' }));
+  const flipBtn = $('#dock-flip');
+  if (flipBtn) flipBtn.addEventListener('click', () => dockFlip());
+
+  let resizeTimer = null;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => wbDispatch({ type: 'viewport' }), 120);
+  });
+  wbRender();
+}
+
+/* Every handle is a role="separator" with arrow-key support. The pointer
+   proposes a size; the reducer clamps it. */
+function wbBindResize(handle, pane, axis, after) {
+  if (!handle) return;
+  const nudge = (delta) => wbDispatch({ type: 'resize', pane, value: wb[WB_PANE_DIMS[pane]] + delta });
+  handle.addEventListener('keydown', (e) => {
+    if (e.key === (axis === 'x' ? 'ArrowLeft' : 'ArrowUp')) { e.preventDefault(); nudge(-WB_RESIZE_STEP); }
+    else if (e.key === (axis === 'x' ? 'ArrowRight' : 'ArrowDown')) { e.preventDefault(); nudge(WB_RESIZE_STEP); }
+  });
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    document.body.classList.add('wb-resizing');
+    const move = (ev) => {
+      const value = axis === 'x'
+        ? (pane === 'agent' ? window.innerWidth - ev.clientX : ev.clientX)
+        : window.innerHeight - ev.clientY - WB.WORKBENCH_TOKENS.statusBarHeight;
+      wbDispatch({ type: 'resize', pane, value });
+    };
+    const up = () => {
+      document.body.classList.remove('wb-resizing');
+      window.removeEventListener('mousemove', move);
+      window.removeEventListener('mouseup', up);
+      if (after) after();
+    };
+    window.addEventListener('mousemove', move);
+    window.addEventListener('mouseup', up);
+  });
+}
+
 /* ---------------- dock tabs: preview ⇄ agent files ---------------- */
 
 const dockState = {
   fileTabs: [],
   active: 'preview',
-  follow: true,
   loadSeq: 0,
+  scrollTops: {},
+  dirtyRun: false,
+  // follow and the tab group live in the reducer only (Code Pack K).
+  get follow() { return wb.follow; },
+  set follow(value) { wbDispatch({ type: 'follow', value }); },
 };
 
 const DOCK_MAX_TABS = 15;
@@ -3012,6 +3496,391 @@ function syncEditorHlScroll() {
   hl.scrollLeft = ed.scrollLeft;
 }
 
+// The flip control reflects canFlip: enabled with a changed file, calmly
+// disabled ("No changed file") otherwise, and locked during a workspace
+// transition.
+function updateFlipControl() {
+  const el = $('#dock-flip');
+  if (!el) return;
+  const can = WB.canFlip(wb);
+  el.classList.toggle('is-disabled', !can);
+  el.setAttribute('aria-disabled', can ? 'false' : 'true');
+  el.title = !wb.lastFile
+    ? 'No changed file'
+    : (wb.transitioning ? 'Flip is disabled during a workspace change' : 'Flip between Preview and the last changed file (⌘⌥F)');
+}
+
+// Restart the 120 ms opacity fade on the dock body (reduced motion removes it).
+function wbFade(el) {
+  if (!el) return;
+  el.classList.remove('wb-flip-fade');
+  void el.offsetWidth;
+  el.classList.add('wb-flip-fade');
+}
+
+/* ---------------- business view (R2 Task 21) ----------------
+   The Business tab renders the backend's business state; every control
+   reflects what the backend can actually do (no capability guessing). */
+
+function bizState() { return state.business || null; }
+
+function currentBizWorkflow() {
+  const data = bizState();
+  const sel = $('#biz-workflow');
+  if (!data || !sel) return null;
+  return window.XavaniBusiness.workflowById(data, sel.value);
+}
+
+function updateBizRunState() {
+  const w = currentBizWorkflow();
+  const values = { period: ($('#biz-period') || {}).value, currency: ($('#biz-currency') || {}).value };
+  const run = window.XavaniBusiness.runState(w, values);
+  const btn = $('#biz-run');
+  const note = $('#biz-missing');
+  if (!btn || !note) return;
+  btn.disabled = !run.enabled;
+  btn.title = run.enabled ? 'Stage this workflow request in the chat' : run.note;
+  note.classList.toggle('hidden', run.enabled);
+  note.textContent = run.enabled ? '' : run.note;
+}
+
+async function loadBusinessState() {
+  const list = $('#biz-sources');
+  if (!list) return;
+  try {
+    const res = await dapi('/desktop/api/business/state');
+    const d = await res.json();
+    if (d.error) { list.innerHTML = `<div class="empty">${escapeHtml(d.error)}</div>`; return; }
+    state.business = window.XavaniBusiness.normalizeState(d);
+    renderBusiness();
+  } catch (err) {
+    list.innerHTML = `<div class="empty">Business state unavailable: ${escapeHtml(String(err))}</div>`;
+  }
+}
+
+function bizRows(selector, items, make) {
+  const el = $(selector);
+  if (!el) return;
+  el.innerHTML = '';
+  if (!items.length) { el.innerHTML = '<div class="empty">None.</div>'; return; }
+  for (const item of items) el.appendChild(make(item));
+}
+
+function renderBusiness() {
+  const data = bizState();
+  if (!data) return;
+  const sel = $('#biz-workflow');
+  if (sel && !sel.options.length) {
+    for (const w of data.workflows) {
+      const opt = document.createElement('option');
+      opt.value = w.id;
+      opt.textContent = `${w.id} — ${w.name}`;
+      sel.appendChild(opt);
+    }
+    sel.addEventListener('change', updateBizRunState);
+    $('#biz-period').addEventListener('input', updateBizRunState);
+    $('#biz-currency').addEventListener('input', updateBizRunState);
+    $('#biz-run').addEventListener('click', runBusinessWorkflow);
+  }
+  bizRows('#biz-sources', data.sources, (s) => {
+    const el = document.createElement('div');
+    el.className = `biz-item${s.access === 'Unavailable' ? ' unavailable' : ''}`;
+    el.textContent = window.XavaniBusiness.sourceText(s);
+    return el;
+  });
+  bizRows('#biz-drafts', data.drafts, (d) => {
+    const el = document.createElement('div');
+    el.className = 'biz-item';
+    el.textContent = d.name || d.path || 'draft';
+    if (d.path) el.title = d.path;
+    return el;
+  });
+  bizRows('#biz-checks', data.checks, (c) => {
+    const el = document.createElement('div');
+    el.className = `biz-item${c.status === 'failed' ? ' failed' : ''}`;
+    el.textContent = window.XavaniBusiness.checkText(c);
+    return el;
+  });
+  bizRows('#biz-approvals', data.approvals, (a) => {
+    const el = document.createElement('div');
+    el.className = `biz-item${a.state === 'denied' ? ' denied' : ''}`;
+    const label = document.createElement('span');
+    label.textContent = window.XavaniBusiness.approvalText(a);
+    el.appendChild(label);
+    if (a.state === 'pending_approval' || a.state === 'draft') {
+      const approve = document.createElement('button');
+      approve.className = 'btn ghost sm biz-decision';
+      approve.textContent = 'Approve';
+      approve.addEventListener('click', () => decideBusiness(a.id, 'approve'));
+      const deny = document.createElement('button');
+      deny.className = 'btn ghost sm biz-decision';
+      deny.textContent = 'Deny';
+      deny.addEventListener('click', () => decideBusiness(a.id, 'deny'));
+      el.appendChild(approve);
+      el.appendChild(deny);
+    }
+    return el;
+  });
+  bizRows('#biz-outstanding', data.outstanding, (o) => {
+    const el = document.createElement('div');
+    el.className = 'biz-item';
+    el.textContent = `${o.summary || o.name || 'item'} — ${o.state || 'open'}`;
+    return el;
+  });
+  updateBizRunState();
+}
+
+async function decideBusiness(id, decision) {
+  const res = await dapi('/desktop/api/business/decide', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id, decision }),
+  }).catch(() => null);
+  const d = res ? await res.json().catch(() => ({})) : {};
+  if (d && d.error) toast(d.error);
+  await loadBusinessState(); // navigation-proof: state is re-read from the queue
+}
+
+async function runBusinessWorkflow() {
+  const w = currentBizWorkflow();
+  if (!w) return;
+  const res = await dapi('/desktop/api/business/select', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      workflow_id: w.id,
+      period: $('#biz-period').value.trim(),
+      currency: $('#biz-currency').value.trim(),
+    }),
+  }).catch(() => null);
+  const d = res ? await res.json().catch(() => ({})) : {};
+  if (!d || d.error) { toast(d && d.error ? d.error : 'Workflow selection failed'); return; }
+  if (d.message) {
+    const input = $('#input');
+    if (input) { input.value = d.message; input.focus(); }
+    toast('Workflow request staged in the chat.');
+  }
+}
+
+/* ---------------- capture controls (R2 Task 23) ----------------
+   Explicit start only: idle requests nothing, the picker is a user
+   gesture, and the main-process adapter owns permissions + the temp file. */
+
+let captureControls = null;
+
+function renderCaptureState(s) {
+  const main = $('#rec-main');
+  const stop = $('#rec-stop');
+  const disc = $('#rec-discard');
+  const label = $('#rec-state');
+  if (!main) return;
+  const show = (el, on) => { if (el) el.classList.toggle('hidden', !on); };
+  const labels = {
+    idle: '',
+    requesting: 'requesting…',
+    recording: '● recording',
+    paused: '⏸ paused',
+    stopped: 'stopped — save or discard',
+    saved: 'saved',
+    failed: 'failed',
+  };
+  if (label) label.textContent = Object.prototype.hasOwnProperty.call(labels, s) ? labels[s] : (s || '');
+  main.textContent = s === 'recording' ? '⏸ Pause'
+    : s === 'paused' ? '▶ Resume'
+      : (s === 'stopped' || s === 'saved') ? 'Save…'
+        : '● Capture';
+  show(stop, s === 'recording' || s === 'paused');
+  show(disc, s === 'stopped' || s === 'failed');
+  if (s === 'idle' || s === 'saved' || s === 'failed') closeCapturePicker();
+}
+
+function closeCapturePicker() {
+  const picker = $('#rec-picker');
+  if (picker) picker.classList.add('hidden');
+}
+
+async function openCapturePicker() {
+  const picker = $('#rec-picker');
+  if (!picker || !captureControls) return;
+  picker.innerHTML = '<div class="empty">Loading sources…</div>';
+  picker.classList.remove('hidden');
+  const cancel = document.createElement('button');
+  cancel.className = 'btn ghost sm rec-source';
+  cancel.id = 'rec-cancel';
+  cancel.textContent = 'Cancel';
+  cancel.addEventListener('click', closeCapturePicker);
+  let sources = [];
+  try {
+    sources = await captureControls.listSources();
+    if (!Array.isArray(sources)) sources = [];
+  } catch { sources = []; }
+  picker.innerHTML = '';
+  if (!sources.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty';
+    empty.textContent = 'No capture sources available.';
+    picker.appendChild(empty);
+  }
+  for (const source of sources) {
+    const btn = document.createElement('button');
+    btn.className = 'btn ghost sm rec-source';
+    btn.textContent = source.name;
+    btn.addEventListener('click', () => {
+      closeCapturePicker();
+      captureControls.start(source.id);
+    });
+    picker.appendChild(btn);
+  }
+  picker.appendChild(cancel);
+}
+
+function initCaptureControls() {
+  const main = $('#rec-main');
+  if (!main || !window.XavaniRecordingControls || !window.xavaniDesktop) return;
+  captureControls = window.XavaniRecordingControls.createRecordingControls({
+    bridge: {
+      listSources: () => window.xavaniDesktop.listCaptureSources(),
+      startCapture: (id) => window.xavaniDesktop.startCapture(id),
+      writeChunk: (buf) => window.xavaniDesktop.writeCaptureChunk(buf),
+      stopCapture: () => window.xavaniDesktop.stopCapture(),
+      saveCapture: () => window.xavaniDesktop.saveCapture(),
+      discardCapture: () => window.xavaniDesktop.discardCapture(),
+    },
+    onState: (s) => renderCaptureState(s),
+    onError: (msg) => toast(msg),
+  });
+  main.addEventListener('click', () => {
+    const s = captureControls.currentState();
+    if (s === 'idle') openCapturePicker();
+    else if (s === 'recording') captureControls.pause();
+    else if (s === 'paused') captureControls.resume();
+    else if (s === 'stopped') captureControls.save();
+    else if (s === 'saved') captureControls.discard().then(() => openCapturePicker());
+  });
+  const stopBtn = $('#rec-stop');
+  if (stopBtn) stopBtn.addEventListener('click', () => captureControls.stop());
+  const discBtn = $('#rec-discard');
+  if (discBtn) discBtn.addEventListener('click', () => captureControls.discard());
+  if (window.xavaniDesktop.onCaptureState) {
+    window.xavaniDesktop.onCaptureState((info) => {
+      if (info && info.state === 'stopped') {
+        const s = captureControls.currentState();
+        if (s === 'recording' || s === 'paused') captureControls.limitReached();
+      }
+    });
+  }
+  // A secret-capable dialog pauses capture while it is open.
+  const backdrop = $('#modal-backdrop');
+  if (backdrop) {
+    new MutationObserver(() => {
+      captureControls.notifyDialog(!backdrop.classList.contains('hidden'));
+    }).observe(backdrop, { attributes: true, attributeFilter: ['class'] });
+  }
+  // Capture state survives backend restarts by design: nothing here or in
+  // the main adapter touches backend lifecycle.
+  renderCaptureState('idle');
+}
+
+/* ---------------- work timeline view (R2 Task 22) ---------------- */
+
+state.timeline = state.timeline || { session: '', events: [] };
+
+async function loadTimeline() {
+  const events = $('#tl-events');
+  if (!events) return;
+  const replayBtn = $('#tl-replay');
+  const exportBtn = $('#tl-export');
+  if (replayBtn && !replayBtn.dataset.bound) {
+    replayBtn.dataset.bound = '1';
+    replayBtn.addEventListener('click', replayTimeline);
+  }
+  if (exportBtn && !exportBtn.dataset.bound) {
+    exportBtn.dataset.bound = '1';
+    exportBtn.addEventListener('click', exportTimeline);
+  }
+  try {
+    const res = await dapi('/desktop/api/timeline');
+    const d = await res.json();
+    if (d.error) { events.innerHTML = `<div class="empty">${escapeHtml(d.error)}</div>`; return; }
+    state.timeline = {
+      session: d.session || '',
+      events: window.XavaniTimeline.sortedByTime(d.events || []),
+    };
+    renderTimeline();
+  } catch (err) {
+    events.innerHTML = `<div class="empty">Timeline unavailable: ${escapeHtml(String(err))}</div>`;
+  }
+}
+
+function renderTimeline() {
+  const data = state.timeline || { session: '', events: [] };
+  const session = $('#tl-session');
+  if (session) session.textContent = data.session || '';
+  const wrap = $('#tl-events');
+  if (!wrap) return;
+  wrap.innerHTML = '';
+  if (!data.events.length) {
+    wrap.innerHTML = '<div class="empty">No events recorded yet.</div>';
+    return;
+  }
+  for (const event of data.events) {
+    const row = document.createElement('div');
+    row.className = `tl-item tl-${String(event.type || '').replace(/\./g, '-')}`;
+    const when = document.createElement('span');
+    when.className = 'tl-time mono';
+    when.textContent = new Date(((event && event.ts) || 0) * 1000).toLocaleTimeString();
+    const title = document.createElement('span');
+    title.className = 'tl-title';
+    title.textContent = window.XavaniTimeline.eventTitle(event);
+    const detail = document.createElement('span');
+    detail.className = 'tl-detail mono dim';
+    detail.textContent = window.XavaniTimeline.eventDetail(event);
+    row.append(when, title, detail);
+    wrap.appendChild(row);
+  }
+}
+
+// Read-only replay: re-render from recorded copies; never dispatches work.
+function replayTimeline() {
+  const current = state.timeline || { session: '', events: [] };
+  state.timeline = { session: current.session, events: window.XavaniTimeline.replayable(current.events) };
+  renderTimeline();
+  toast('Timeline replay is read-only.');
+}
+
+async function exportTimeline() {
+  const data = state.timeline || { session: '', events: [] };
+  const bridge = window.xavaniDesktop && window.xavaniDesktop.exportTimeline;
+  if (!bridge) { toast('Export needs the desktop app.'); return; }
+  const payload = {
+    defaultName: `xavani-timeline-${(data.session || 'session').replace(/[^a-z0-9-_.]/gi, '')}.json`,
+    content: JSON.stringify(
+      { session: data.session || '', events: window.XavaniTimeline.replayable(data.events || []) },
+      null,
+      2,
+    ),
+  };
+  const result = await bridge(payload).catch(() => null);
+  if (!result || result.canceled) return;
+  if (result.error) { toast(`Export failed: ${result.error}`); return; }
+  toast(`Timeline exported to ${result.filePath}`);
+}
+
+// The dock head tabs (Preview / To-Do) render from the reducer's tab group,
+// so the highlight can never disagree with the dock's state.
+function renderDockHead() {
+  const files = wb.dockTab === 'files';
+  const todo = dockState.active === 'todo';
+  const business = dockState.active === 'business';
+  const timeline = dockState.active === 'timeline';
+  const preview = $('#tab-preview');
+  const todoBtn = $('#tab-todo');
+  const bizBtn = $('#tab-business');
+  const tlBtn = $('#tab-timeline');
+  if (preview) preview.classList.toggle('active', !todo && !business && !timeline && !files);
+  if (todoBtn) todoBtn.classList.toggle('active', todo);
+  if (bizBtn) bizBtn.classList.toggle('active', business);
+  if (tlBtn) tlBtn.classList.toggle('active', timeline);
+}
+
 function renderDockTabs() {
   const wrap = $('#dock-tabs');
   wrap.innerHTML = '';
@@ -3046,13 +3915,29 @@ function renderDockTabs() {
 }
 
 function setDockTab(id) {
+  const prev = dockState.active;
+  // Remember the file pane's scroll before leaving it.
+  if (prev && prev !== 'preview' && prev !== 'todo' && prev !== 'business' && prev !== 'timeline') {
+    const sc = $('#dock-filescroll');
+    if (sc) dockState.scrollTops[prev] = sc.scrollTop;
+  }
   dockState.active = id;
   const isPreview = id === 'preview';
   const isTodo = id === 'todo';
+  const isBusiness = id === 'business';
+  const isTimeline = id === 'timeline';
+  // The tab group is the reducer's; To-Do is a legacy extra view.
+  if (isPreview) wbDispatch({ type: 'dock-tab', tab: 'preview' });
+  else if (!isTodo && !isBusiness && !isTimeline) wbDispatch({ type: 'dock-tab', tab: 'files' });
+  if (prev !== id) wbFade($('.dock-body'));
   $('#dock-webview').style.display = (isPreview && !isTodo) ? '' : 'none';
   $('#dock-todoview').classList.toggle('hidden', !isTodo);
-  $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo);
+  $('#dock-businessview').classList.toggle('hidden', !isBusiness);
+  $('#dock-timelineview').classList.toggle('hidden', !isTimeline);
+  $('#dock-fileview').classList.toggle('hidden', isPreview || isTodo || isBusiness || isTimeline);
   $('#dock-hint').style.display = (isPreview && !isTodo && !state.dockNavigated) ? '' : 'none';
+  if (isBusiness) loadBusinessState();
+  if (isTimeline) loadTimeline();
   $('.dock-bar').classList.toggle('in-todo', isTodo);
   renderDockTabs();
   if (isTodo) loadTodos();
@@ -3144,7 +4029,7 @@ async function loadFileIntoDock(path) {
     const n = d.content.split('\n').length;
     for (let i = 1; i <= n; i++) g += i + '\n';
     $('#dock-filegutter').textContent = g;
-    $('#dock-filescroll').scrollTop = 0;
+    $('#dock-filescroll').scrollTop = dockState.scrollTops[path] || 0;
   } catch (err) {
     if (seq === dockState.loadSeq) { $('#dock-filecode').textContent = String(err); $('#dock-filegutter').textContent = ''; }
   }
@@ -3216,6 +4101,7 @@ function agentTouchedFile(evt) {
   if (!/writ|patch|edit|creat|save|apply/.test(tool)) return;
   const path = extractFilePath(evt);
   if (!path) return;
+  wbFileChanged(path);
   dockState.dirtyRun = true;
   clearTimeout(dockRefreshTimers[path]);
   dockRefreshTimers[path] = setTimeout(() => {
@@ -3240,24 +4126,27 @@ function dockRunEnded() {
   }
 }
 
+// The /flip command and the ⌘⌥F chord: toggle preview ⇄ the last changed
+// file through the reducer, never reopening a pane the user closed.
 function dockFlip() {
-  if (!state.dockUserClosed && !$('#app').classList.contains('dock-open')) $('#dock-toggle').click();
-  state.dockUserClosed = false;
-  if (dockState.active === 'preview') {
-    if (dockState.fileTabs.length) setDockTab(dockState.fileTabs[0].path);
-  } else {
-    setDockTab('preview');
+  if (state.dockUserClosed) return;
+  if (!wb.dockOpen) {
+    if (wb.transitioning) { toast('Flip is disabled during a workspace change'); return; }
+    wbDispatch({ type: 'open-dock' });
   }
+  if (!WB.canFlip(wb)) {
+    toast(wb.lastFile ? 'Flip is disabled during a workspace change' : 'No changed file');
+    return;
+  }
+  const next = wbDispatch({ type: 'flip' });
+  if (next.dockTab === 'files' && next.lastFile) dockOpenFile(next.lastFile, true);
+  else setDockTab('preview');
 }
 
 function setupDockTabs() {
   renderDockTabs();
   for (const btn of document.querySelectorAll('.dock-tabs-head .dock-tab')) {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.dock-tabs-head .dock-tab').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-      setDockTab(btn.dataset.docktab);
-    });
+    btn.addEventListener('click', () => setDockTab(btn.dataset.docktab));
   }
   $('#todo-add').addEventListener('click', async () => {
     const input = $('#todo-input');
@@ -3275,33 +4164,15 @@ function setupDockTabs() {
   });
 }
 
+// The Agent pane size lives in the workbench state (per workspace and
+// profile); the standalone xd-dock-w key is gone.
 function setupDockResize() {
   const handle = $('#dock-resize');
-  const dock = $('#dock');
-  let dragging = false;
-  const stored = parseInt(localStorage.getItem('xd-dock-w'), 10);
-  if (stored >= 320) dock.style.width = `${stored}px`;
-  handle.addEventListener('mousedown', (e) => {
-    dragging = true;
-    document.body.classList.add('dock-resizing');
-    e.preventDefault();
-  });
-  window.addEventListener('mousemove', (e) => {
-    if (!dragging) return;
-    const w = Math.min(window.innerWidth - 360, Math.max(320, window.innerWidth - e.clientX));
-    dock.style.width = `${w}px`;
-  });
-  window.addEventListener('mouseup', () => {
-    if (!dragging) return;
-    dragging = false;
-    document.body.classList.remove('dock-resizing');
-    localStorage.setItem('xd-dock-w', String(dock.offsetWidth));
-    setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
-  });
+  const refit = () => { setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60); };
+  wbBindResize(handle, 'agent', 'x', refit);
   handle.addEventListener('dblclick', () => {
-    dock.style.width = '';
-    localStorage.removeItem('xd-dock-w');
-    setTimeout(() => { try { termState.fit && termState.fit.fit(); } catch {} }, 60);
+    wbDispatch({ type: 'resize', pane: 'agent', value: WB.LAYOUT_DEFAULTS.agentWidth });
+    refit();
   });
 }
 
@@ -3310,7 +4181,7 @@ function setupDockResize() {
 const MIG_LABELS = {
   claude_code: 'Claude Code',
   codex: 'OpenAI Codex CLI',
-  hermes: 'Hermes Agent',
+  hermes: 'Legacy Agent',
   cursor: 'Cursor',
   gemini: 'Gemini CLI',
   opencode: 'OpenCode',
