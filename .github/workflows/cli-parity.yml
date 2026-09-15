@@ -1,10 +1,15 @@
 name: cli-parity
 
-# The desktop app must always match the CLI. When the engine's command
-# registry drifts from the committed snapshot, this fails loudly with the
-# exact commands that need desktop coverage.
+# The desktop app must always match the CLI. Three jobs keep the app
+# aligned:
+#   - parity:        the engine's command registry against the committed
+#                    snapshot (shared protocol contract);
+#   - js-tests:      desktop JavaScript syntax and unit tests;
+#   - backend-tests: desktop Python backend tests.
+# The weekly schedule checks parity drift; pull requests run all three.
 
 on:
+  pull_request:
   schedule:
     - cron: '0 6 * * 1'  # every Monday 06:00 UTC
   workflow_dispatch:
@@ -34,3 +39,39 @@ jobs:
 
       - name: Parity check
         run: bash scripts/check_parity.sh "$GITHUB_WORKSPACE/engine-src"
+
+  js-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Syntax checks
+        run: npm run check:syntax
+
+      - name: Unit tests (node --test)
+        run: npm run test:unit
+
+  backend-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install test dependencies
+        run: pip install pytest aiohttp
+
+      - name: Backend tests
+        run: python -m pytest -o addopts= -q tests/desktop
