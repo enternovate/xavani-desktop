@@ -30,18 +30,28 @@ STARTED_AT = time.time()
 
 
 def _engine_root() -> Path:
-    env = os.environ.get("XAVANI_ENGINE_ROOT")
-    if env and (Path(env) / "run_agent.py").exists():
-        return Path(env)
+    """Resolve the engine tree from the environment or the app layout."""
+    for name in ("XAVANI_ENGINE_ROOT", "XAVANI_ENGINE_SRC"):
+        env = os.environ.get(name)
+        if env and (Path(env) / "run_agent.py").exists():
+            return Path(env)
     here = Path(__file__).resolve().parent
     for candidate in (here.parent / "engine", here.parent, *here.parents):
         if (candidate / "run_agent.py").exists():
-            return str(candidate) and Path(candidate)
+            return Path(candidate)
     raise SystemExit("xavani-agent engine root not found (looked for run_agent.py)")
 
 
-ENGINE_ROOT = _engine_root()
-sys.path.insert(0, str(ENGINE_ROOT))
+_ENGINE_ROOT: Path | None = None
+
+
+def engine_root() -> Path:
+    """Resolve the engine tree once, on first use."""
+    global _ENGINE_ROOT
+    if _ENGINE_ROOT is None:
+        _ENGINE_ROOT = _engine_root()
+        sys.path.insert(0, str(_ENGINE_ROOT))
+    return _ENGINE_ROOT
 
 # All children (CLI one-shots, PTY shell, MCP servers spawned by the engine)
 # must see this interpreter's console scripts — e.g. the bundled
@@ -96,10 +106,10 @@ def _load_config() -> dict:
 
 def _engine_version() -> str:
     try:
-        data = tomllib.loads((ENGINE_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        data = tomllib.loads((engine_root() / "pyproject.toml").read_text(encoding="utf-8"))
         return str(data.get("project", {}).get("version", "unknown"))
     except Exception:
-        match = re.search(r'VERSION\s*=\s*"([^"]+)"', (ENGINE_ROOT / "xavani.py").read_text(encoding="utf-8"))
+        match = re.search(r'VERSION\s*=\s*"([^"]+)"', (engine_root() / "xavani.py").read_text(encoding="utf-8"))
         return match.group(1) if match else "unknown"
 
 
@@ -263,7 +273,7 @@ def build_desktop_app(api_port: int, secret: str):
         bindir = str(Path(sys.executable).parent)
         env = {
             **os.environ,
-            "PYTHONPATH": str(ENGINE_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "PYTHONPATH": str(engine_root()) + os.pathsep + os.environ.get("PYTHONPATH", ""),
             "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
         }
         # Route through xavani_cli.main directly: xavani.py's delegation set
@@ -337,7 +347,7 @@ def build_desktop_app(api_port: int, secret: str):
         env = {
             **os.environ,
             "TERM": "xterm-256color",
-            "PYTHONPATH": str(ENGINE_ROOT) + os.pathsep + os.environ.get("PYTHONPATH", ""),
+            "PYTHONPATH": str(engine_root()) + os.pathsep + os.environ.get("PYTHONPATH", ""),
             "PYTHONUNBUFFERED": "1",
         }
 
@@ -1150,7 +1160,7 @@ def build_desktop_app(api_port: int, secret: str):
             "engine_version": _engine_version(),
             "python": sys.version.split()[0],
             "xavani_home": str(_xavani_home()),
-            "engine_root": str(ENGINE_ROOT),
+            "engine_root": str(engine_root()),
             "profile": profile,
             "model": model_cfg.get("default"),
             "provider": model_cfg.get("provider"),
