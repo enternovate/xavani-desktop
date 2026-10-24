@@ -66,12 +66,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Checkout engine
+        uses: actions/checkout@v4
+        with:
+          repository: enternovate/xavani-agent
+          path: engine-src
+          ref: main
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
 
       - name: Install test dependencies
-        run: pip install pytest aiohttp
+        run: |
+          pip install pytest aiohttp pyyaml "ruamel.yaml" requests psutil
+          pip install -e ./engine-src --no-deps
 
       - name: Backend tests
+        env:
+          XAVANI_ENGINE_ROOT: ${{ github.workspace }}/engine-src
         run: python -m pytest -o addopts= -q tests/desktop
