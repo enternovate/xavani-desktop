@@ -8,8 +8,8 @@ surfaces every capability the 0.2.0 engine ships.
 - **CLI 0.2.0 parity** — composer autocomplete lists all 90 engine commands (was 13).
   Session slash-commands run through the live Console; an Agent Ops view covers the rest.
 - **First-run setup wizard** — new installs with no prior sessions get guided setup:
-  provider + API key, model, toolsets, history import from Claude Code / Codex /
-  Hermes / Cursor, and workspace root. Existing users never see it.
+  provider + API key, model, toolsets, history import from other coding CLIs,
+  and workspace root. Existing users never see it.
 - **Full Settings view** — appearance/skins, model & provider, reasoning effort and
   fast mode, toolsets, MCP servers (add/remove), profiles, display zoom, updates,
   about. Whitelisted config editor only; comments in config.yaml preserved.

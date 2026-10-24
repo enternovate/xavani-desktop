@@ -30,7 +30,6 @@ approval gates.
 
 ## Attribution
 
-This is a derivative of the Hermes Browser Extension by Jon Komet
-(@abundantbeing), used under the MIT License. Upstream copyright and
-permission notices are preserved in the README of that project and in
-this repository's history. Built by Enternovate under the MIT License.
+Derivative of an MIT-licensed upstream browser extension. Required
+copyright and permission notices are preserved upstream and in this
+repository's history. Built by Enternovate under the MIT License.
