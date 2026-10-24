@@ -9,7 +9,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ENGINE_SRC="${XAVANI_ENGINE_SRC:-$HOME/.xavani/xavani-agent}"
+: "${XAVANI_ENGINE_SRC:?set XAVANI_ENGINE_SRC to the xavani-agent checkout}"
+[ -f "$XAVANI_ENGINE_SRC/run_agent.py" ] || { echo "error: $XAVANI_ENGINE_SRC is not the engine" >&2; exit 1; }
+[ -z "$(git -C "$XAVANI_ENGINE_SRC" status --porcelain)" ] || { echo "error: engine tree is dirty" >&2; exit 1; }
+ENGINE_SRC="$XAVANI_ENGINE_SRC"
+ENGINE_REV="$(git -C "$ENGINE_SRC" rev-parse HEAD)"
 BUILD="$ROOT/build"
 STAGE="$BUILD/dmg-stage"
 APP="$STAGE/Xavani.app"
@@ -75,10 +79,31 @@ rsync -a --delete \
   --exclude 'package.json' --exclude 'package-lock.json' --exclude 'ui-tui' \
   "$ENGINE_SRC/" "$RES/backend/engine/"
 
+echo "==> Release manifest"
+python3 - "$RES/release-manifest.json" "$VERSION" "$ENGINE_REV" "$(uname -m)" <<'PY'
+import json
+import sys
+from datetime import datetime, timezone
+
+path, version, revision, machine = sys.argv[1:5]
+manifest = {
+    "schema": 1,
+    "version": version,
+    "engine_revision": revision,
+    "engine_dirty": False,
+    "built_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+    "platform": f"macos-{machine}",
+}
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(manifest, handle, indent=2, sort_keys=True)
+    handle.write("\n")
+print(f"wrote {path}")
+PY
+
 echo "==> Engine dependencies (from uv.lock)"
 REQS=$(mktemp)
 (cd "$ENGINE_SRC" && uv export --frozen --no-dev --no-hashes --no-emit-project --format requirements-txt -o "$REQS") >/dev/null
-uv pip install --python "$RES/backend/runtime/bin/python${PYVER}" -r "$REQS" aiohttp --quiet
+uv pip install --python "$RES/backend/runtime/bin/python${PYVER}" -r "$REQS" --quiet
 rm -f "$REQS"
 
 echo "==> Constellation products (gavaza, nyarhi, mhangani, mcp)"
