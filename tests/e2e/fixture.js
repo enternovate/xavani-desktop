@@ -192,6 +192,11 @@ async function launchWorkbench(options = {}) {
   });
 
   const page = await app.firstWindow();
+  const mainLog = [];
+  try {
+    app.process().stderr.on('data', (b) => mainLog.push(String(b)));
+    app.process().stdout.on('data', (b) => mainLog.push(String(b)));
+  } catch { /* process handle unavailable */ }
   const errors = [];
   page.on('pageerror', (err) => errors.push(`pageerror: ${err}`));
   page.on('console', (msg) => {
@@ -269,7 +274,7 @@ async function launchWorkbench(options = {}) {
     try { await app.close(); } catch { /* already closed */ }
     try { runtime.kill('SIGKILL'); } catch { /* already gone */ }
     sweepNewBackends(beforeBackends);
-    throw new Error(`readiness failed ${boot} (kept: ${home} ${workspace}): ${err && err.message}`);
+    throw new Error(`readiness failed ${boot} (kept: ${home} ${workspace}): ${err && err.message}\n--- renderer errors ---\n${errors.join('\n').slice(-2000)}\n--- main log tail ---\n${mainLog.join('').slice(-1500)}\n--- runtime log tail ---\n${runtimeLog.slice(-800)}`);
   }
 
   return { app, page: appPage, home, workspace, errors, runtimeLog: () => runtimeLog, close };

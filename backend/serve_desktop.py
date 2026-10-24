@@ -29,7 +29,7 @@ from pathlib import Path
 STARTED_AT = time.time()
 
 
-def _engine_root() -> Path:
+def _engine_root() -> Path | None:
     """Resolve the engine tree from the environment or the app layout."""
     for name in ("XAVANI_ENGINE_ROOT", "XAVANI_ENGINE_SRC"):
         env = os.environ.get(name)
@@ -39,19 +39,22 @@ def _engine_root() -> Path:
     for candidate in (here.parent / "engine", here.parent, *here.parents):
         if (candidate / "run_agent.py").exists():
             return Path(candidate)
-    raise SystemExit("xavani-agent engine root not found (looked for run_agent.py)")
+    return None
 
 
-_ENGINE_ROOT: Path | None = None
+# Resolve at import so the engine path is on sys.path before any engine import.
+# A missing engine must not abort the import: tests and tooling collect this
+# module in checkouts that have no engine tree.
+ENGINE_ROOT = _engine_root()
+if ENGINE_ROOT is not None:
+    sys.path.insert(0, str(ENGINE_ROOT))
 
 
 def engine_root() -> Path:
-    """Resolve the engine tree once, on first use."""
-    global _ENGINE_ROOT
-    if _ENGINE_ROOT is None:
-        _ENGINE_ROOT = _engine_root()
-        sys.path.insert(0, str(_ENGINE_ROOT))
-    return _ENGINE_ROOT
+    """Return the engine tree, or exit with a clear message at first use."""
+    if ENGINE_ROOT is None:
+        raise SystemExit("xavani-agent engine root not found (looked for run_agent.py)")
+    return ENGINE_ROOT
 
 # All children (CLI one-shots, PTY shell, MCP servers spawned by the engine)
 # must see this interpreter's console scripts — e.g. the bundled
