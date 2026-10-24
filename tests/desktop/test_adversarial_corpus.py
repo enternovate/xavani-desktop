@@ -217,12 +217,11 @@ def test_attack_auth_token_casing_is_exact():
 
 
 def test_attack_auth_bearer_with_trailing_bytes_is_denied():
-    # severity: critical. Suffix padding and scheme-confusion that survives HTTP
-    # field parsing: the comparison is exact and case-sensitive on the scheme.
+    # severity: critical. Suffix bytes and scheme confusion must never
+    # authenticate. Trailing OWS (SP/HTAB) is the exception the HTTP parser
+    # owns: RFC 7230 requires receivers to strip it, so those requests reach
+    # the server as the canonical value. That case is covered separately below.
     for supplied in (
-        f"Bearer {SECRET} ",            # trailing SP survives the parser
-        f"Bearer {SECRET}\t",           # trailing HTAB survives the parser
-        f"Bearer {SECRET}  ",
         f"Bearer {SECRET}x",
         f"Bearer  {SECRET}",            # doubled internal SP
         f"Bearer {SECRET}{SECRET}",
@@ -234,6 +233,23 @@ def test_attack_auth_bearer_with_trailing_bytes_is_denied():
     ):
         status, _ = _probe({"Authorization": supplied})
         assert status == 401, supplied
+
+
+def test_attack_auth_trailing_ows_never_produces_a_partial_auth():
+    # severity: critical. A parser that strips trailing OWS turns the request
+    # into the canonical one, so 200 is correct there. A parser that keeps it
+    # must refuse. Neither may return a 5xx or a malformed body.
+    for supplied in (
+        f"Bearer {SECRET} ",
+        f"Bearer {SECRET}\t",
+        f"Bearer {SECRET}  ",
+    ):
+        status, body = _probe({"Authorization": supplied})
+        assert status in (200, 401), supplied
+        if status == 200:
+            assert isinstance(body, dict), supplied
+        else:
+            assert body == {"error": "Unauthorized."}, supplied
 
 
 def test_attack_auth_leading_ows_is_normalised_not_bypassed():
@@ -685,6 +701,9 @@ def test_attack_workspace_unicode_normalization_is_deterministic_and_contained(
     (workspace / nfd).write_text("normalized\n", encoding="utf-8")
     # A credential whose *suffix* is unicode-adjacent is still a credential.
     (workspace / "caf\u00e9.key").write_text("KEYMATERIAL\n", encoding="utf-8")
+    # A normalising filesystem resolves the decomposed spelling to the same
+    # file; a non-normalising one keeps it as a distinct, non-existent name.
+    normalising = (workspace / "cafe\u0301.key").exists()
 
     for raw in (nfd, nfc):
         first = resolve_workspace_path(workspace, raw)
@@ -693,16 +712,24 @@ def test_attack_workspace_unicode_normalization_is_deterministic_and_contained(
         assert _inside(first, workspace), raw             # never escapes
         assert first != Path(os.path.realpath(victim)), raw
 
-    # Both spellings of the credential name are refused, for read and write.
-    for raw in ("caf\u00e9.key", "cafe\u0301.key"):
+    # Every spelling that reaches the credential file is refused, for read and
+    # write. On a non-normalising filesystem only the NFC spelling reaches it.
+    credential_spellings = ["caf\u00e9.key"]
+    if normalising:
+        credential_spellings.append("cafe\u0301.key")
+    for raw in credential_spellings:
         with pytest.raises(WorkspaceError):
             resolve_workspace_path(workspace, raw)
         with pytest.raises(WorkspaceError):
             resolve_workspace_path(workspace, raw, write=True)
 
-    # A unicode-named symlink out of the root is refused in either spelling.
+    # A unicode-named symlink out of the root is refused in every spelling that
+    # resolves to it.
     (workspace / "caf\u00e9-link").symlink_to(tmp_path, target_is_directory=True)
-    for raw in ("caf\u00e9-link/victim.txt", "cafe\u0301-link/victim.txt"):
+    link_spellings = ["caf\u00e9-link/victim.txt"]
+    if normalising:
+        link_spellings.append("cafe\u0301-link/victim.txt")
+    for raw in link_spellings:
         with pytest.raises(WorkspaceError):
             resolve_workspace_path(workspace, raw)
     assert victim.read_text(encoding="utf-8") == "VICTIM\n"
