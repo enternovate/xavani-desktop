@@ -148,7 +148,7 @@ files travel with them and must not be stripped.
 | Component | `package.json` range | Installed version | License | License file in the payload |
 | --- | --- | --- | --- | --- |
 | `marked` | `^15.0.0` | 15.0.12 | MIT | `node_modules/marked/LICENSE.md` |
-| `dompurify` | `^3.2.0` | 3.4.14 | Apache-2.0 / MPL-2.0 | `node_modules/dompurify/LICENSE`, `LICENSE-MPL` |
+| `dompurify` | `^3.4.17` | 3.4.17 | Apache-2.0 / MPL-2.0 | `node_modules/dompurify/LICENSE`, `LICENSE-MPL` |
 
 The vendored browser bundles of these two libraries are byte-identical to the
 installed package copies (verified by SHA-256):

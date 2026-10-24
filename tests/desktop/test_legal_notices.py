@@ -50,7 +50,7 @@ BANNED_DEFAULT_REQUESTS = [
 VENDORED_NOTICE_LINES = [
     ("marked.min.js", "Copyright (c) 2011-2025, Christopher Jeffrey."),
     ("marked.min.js", "MIT Licensed"),
-    ("purify.min.js", "DOMPurify 3.4.14"),
+    ("purify.min.js", "DOMPurify 3.4.17"),
     ("purify.min.js", "Cure53 and other contributors"),
     ("purify.min.js", "Apache license 2.0"),
     ("purify.min.js", "Mozilla Public License 2.0"),
